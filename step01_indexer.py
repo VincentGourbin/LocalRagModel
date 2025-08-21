@@ -1668,7 +1668,8 @@ class VectorIndexer:
         # Initialisation FAISS
         if not FAISS_AVAILABLE:
             raise ImportError("FAISS n'est pas disponible. Installez avec: pip install faiss-cpu")
-        self.faiss_indexer = FAISSIndexer(f"{db_path}_{collection_name}", dimension=2560)
+        # Utiliser directement db_path sans suffixe pour cohérence
+        self.faiss_indexer = FAISSIndexer(db_path, dimension=2560)
         
         # Détection de l'environnement pour l'embedding model
         self.is_mps = torch.backends.mps.is_available()

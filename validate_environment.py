@@ -61,7 +61,9 @@ def check_dependencies():
         ("tqdm", "tqdm"),
         ("numpy", "numpy"),
         ("markdown", "markdown"),
-        ("ollama", "ollama")
+        ("ollama", "ollama"),
+        ("huggingface-hub", "huggingface_hub"),
+        ("safetensors", "safetensors")
     ]
     
     all_ok = True
@@ -109,6 +111,7 @@ def check_project_structure():
     
     required_files = [
         "step01_indexer.py",
+        "step02_upload_embeddings.py",
         "faiss_indexer.py", 
         "requirements.txt",
         "README.md"

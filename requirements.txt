@@ -22,5 +22,9 @@ requests>=2.31.0
 # Local LLM interface
 ollama>=0.1.7
 
+# Hugging Face Hub integration
+huggingface-hub>=0.17.0
+safetensors>=0.4.0
+
 # Optional: Performance monitoring
 psutil>=5.9.0

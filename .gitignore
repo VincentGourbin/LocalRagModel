@@ -1,10 +1,13 @@
 # Index et données
-faiss_index/
-faiss_index_tech_docs/
+faiss_index*/
 *.faiss
 *.pkl
 tracking.json
 metadata.json
+indexing_tracker.json
+
+# Configuration inter-étapes
+step03_config.json
 
 # Modèles et cache
 __pycache__/
