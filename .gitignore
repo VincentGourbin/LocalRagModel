@@ -1,0 +1,35 @@
+# Index et données
+faiss_index/
+*.faiss
+*.pkl
+tracking.json
+
+# Modèles et cache
+__pycache__/
+*.pyc
+*.pyo
+.cache/
+.huggingface/
+
+# Logs et debug
+*.log
+debug_*.txt
+
+# IDE et éditeurs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environnement virtuel
+venv/
+env/
+.env
+
+# Documentation générée
+docs/_build/
