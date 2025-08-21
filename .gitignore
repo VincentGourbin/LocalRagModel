@@ -1,8 +1,10 @@
 # Index et données
 faiss_index/
+faiss_index_tech_docs/
 *.faiss
 *.pkl
 tracking.json
+metadata.json
 
 # Modèles et cache
 __pycache__/
