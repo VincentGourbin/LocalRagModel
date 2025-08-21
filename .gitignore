@@ -9,6 +9,9 @@ indexing_tracker.json
 # Configuration inter-étapes
 step03_config.json
 
+# SSL certificates (auto-generated)
+ssl_certs/
+
 # Modèles et cache
 __pycache__/
 *.pyc
