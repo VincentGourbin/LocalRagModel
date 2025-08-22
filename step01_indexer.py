@@ -1944,6 +1944,133 @@ class VectorIndexer:
             'dimension': stats['dimension']
         }
     
+    def validate_mapping_integrity(self) -> Dict:
+        """Valide l'intégrité du mapping entre l'index FAISS et les métadonnées.
+        
+        Returns:
+            Dict: Rapport de validation avec statistiques et problèmes détectés
+        """
+        print("🔍 Validation de l'intégrité du mapping index ↔ métadonnées...")
+        
+        # Statistiques de base
+        total_vectors = self.faiss_indexer.count()
+        total_metadata = len(self.faiss_indexer.metadata)
+        
+        print(f"📊 Vecteurs FAISS: {total_vectors}")
+        print(f"📊 Entrées métadonnées: {total_metadata}")
+        
+        problems = []
+        valid_mappings = 0
+        missing_metadata = []
+        orphan_metadata = []
+        empty_contents = []
+        
+        # Vérification du type de clés utilisées
+        sample_keys = list(self.faiss_indexer.metadata.keys())[:3]
+        uses_hash_keys = len(sample_keys) > 0 and all(len(key) == 32 and all(c in '0123456789abcdef' for c in key) for key in sample_keys)
+        
+        print(f"📋 Type de clés détecté: {'Hash MD5' if uses_hash_keys else 'Indices séquentiels'}")
+        
+        if uses_hash_keys:
+            # Mode hash : vérifier que chaque vecteur a des métadonnées
+            # Utiliser le fichier mappings.pkl pour faire la correspondance
+            mappings_file = Path(self.db_path) / "mappings.pkl"
+            if mappings_file.exists():
+                import pickle
+                with open(mappings_file, 'rb') as f:
+                    mappings = pickle.load(f)
+                    idx_to_id = mappings.get('idx_to_id', {})
+                    
+                print(f"📋 Mappings chargés: {len(idx_to_id)} entrées")
+                
+                for i in range(total_vectors):
+                    if i in idx_to_id:
+                        chunk_id = idx_to_id[i]
+                        if chunk_id in self.faiss_indexer.metadata:
+                            metadata = self.faiss_indexer.metadata[chunk_id]
+                            if not metadata.get('chunk_content', '').strip():
+                                empty_contents.append(i)
+                            else:
+                                valid_mappings += 1
+                        else:
+                            missing_metadata.append(i)
+                    else:
+                        missing_metadata.append(i)
+            else:
+                problems.append("Fichier mappings.pkl manquant pour les clés hash")
+                # Marquer tous comme problématiques sans mappings
+                missing_metadata.extend(range(total_vectors))
+        else:
+            # Mode séquentiel : vérification directe par index
+            for i in range(total_vectors):
+                metadata_key = str(i)
+                if metadata_key in self.faiss_indexer.metadata:
+                    metadata = self.faiss_indexer.metadata[metadata_key]
+                    
+                    # Vérification du contenu
+                    if not metadata.get('chunk_content', '').strip():
+                        empty_contents.append(i)
+                    else:
+                        valid_mappings += 1
+                else:
+                    missing_metadata.append(i)
+        
+        # Vérification des métadonnées orphelines (sans vecteur correspondant)
+        if uses_hash_keys:
+            # Pour les hash, vérifier avec mappings.pkl
+            if mappings_file.exists():
+                id_to_idx = mappings.get('id_to_idx', {})
+                for key in self.faiss_indexer.metadata.keys():
+                    if key not in id_to_idx:
+                        orphan_metadata.append(key)
+        else:
+            # Pour les indices séquentiels
+            for key in self.faiss_indexer.metadata.keys():
+                try:
+                    idx = int(key)
+                    if idx >= total_vectors:
+                        orphan_metadata.append(idx)
+                except ValueError:
+                    # Key non numérique - potentiel problème
+                    problems.append(f"Clé métadonnée non numérique: {key}")
+        
+        # Construction du rapport
+        is_healthy = (len(missing_metadata) == 0 and 
+                     len(orphan_metadata) == 0 and 
+                     len(empty_contents) == 0 and
+                     len(problems) == 0)
+        
+        report = {
+            'is_healthy': is_healthy,
+            'total_vectors': total_vectors,
+            'total_metadata': total_metadata,
+            'valid_mappings': valid_mappings,
+            'missing_metadata_count': len(missing_metadata),
+            'orphan_metadata_count': len(orphan_metadata), 
+            'empty_contents_count': len(empty_contents),
+            'problems_count': len(problems),
+            'missing_metadata_indices': missing_metadata[:10],  # Premiers 10
+            'orphan_metadata_indices': orphan_metadata[:10],
+            'empty_content_indices': empty_contents[:10],
+            'problems': problems[:10]
+        }
+        
+        # Affichage du rapport
+        if is_healthy:
+            print("✅ Mapping intègre: tous les vecteurs ont des métadonnées valides")
+        else:
+            print("❌ Problèmes de mapping détectés:")
+            if missing_metadata:
+                print(f"   • {len(missing_metadata)} vecteurs sans métadonnées: {missing_metadata[:5]}{'...' if len(missing_metadata) > 5 else ''}")
+            if orphan_metadata:
+                print(f"   • {len(orphan_metadata)} métadonnées orphelines: {orphan_metadata[:5]}{'...' if len(orphan_metadata) > 5 else ''}")
+            if empty_contents:
+                print(f"   • {len(empty_contents)} contenus vides: {empty_contents[:5]}{'...' if len(empty_contents) > 5 else ''}")
+            if problems:
+                print(f"   • {len(problems)} autres problèmes: {problems[:3]}")
+        
+        return report
+    
     def file_needs_reindexing(self, file_path: Path) -> bool:
         """Vérifie si un fichier a besoin d'être réindexé (même logique)."""
         return self.tracker.needs_reindexing(file_path)
@@ -2029,8 +2156,9 @@ class TechnicalDocIndexer:
         # Utiliser FAISS pour l'indexation vectorielle
         print("⚡ Utilisation FAISS (vectoriel haute performance)")
         self.indexer = VectorIndexer(db_path, use_flash_attention=use_flash_attention, use_reranker=use_reranker)
-            
+        
         self.debug = debug
+        self.use_reranker = use_reranker
         
     def index_all_documents(self):
         """Indexe tous les documents HTML du répertoire (mode complet).
@@ -2142,20 +2270,21 @@ class TechnicalDocIndexer:
         print(f"   • Images traitées: {total_images_analyzed}")
         print(f"   • Vecteurs avant indexation: {stats['initial_count']}")
         print(f"   • Vecteurs ajoutés cette session: {stats['vectors_added_session']}")
-        print(f"   • Total vecteurs en base: {stats['total_chunks']}")
-        print(f"   • Collection: {stats['collection_name']}")
+        print(f"   • Total vecteurs en base: {stats['total_count']}")
+        print(f"   • Collection: FAISS-HNSW")
         print(f"   • Chemin base: {stats['db_path']}")
-        print(f"   • Modèle embedding: {stats['model_info']['embedding_model']}")
-        print(f"   • Reranker activé: {stats['model_info']['reranker_enabled']}")
+        print(f"   • Backend: {stats['backend']}")
+        print(f"   • Dimension: {stats['dimension']}")
         
         if total_images_analyzed > 0:
             print(f"\n🖼️  Analyse d'images réussie avec Ollama (qwen2.5vl:7b)")
         
-        if stats['model_info']['reranker_enabled']:
-            reranker_stats = stats['model_info']['reranker_stats']
-            print(f"\n🎯 Reranker configuré: {reranker_stats['model_name']}")
-            print(f"   • Paramètres: {reranker_stats['parameters']:.1f}B")
-            print(f"   • Device: {reranker_stats['device']}")
+        if self.use_reranker:
+            print(f"\n🎯 Reranker configuré: Qwen3-Reranker")
+        
+        # Validation de l'intégrité du mapping
+        print()
+        mapping_report = self.indexer.validate_mapping_integrity()
         
         # Affichage du résumé compact à la fin
         error_collector.print_summary()
@@ -2229,7 +2358,7 @@ class TechnicalDocIndexer:
         if not files_to_process and not files_to_reindex:
             print("✅ Tous les fichiers sont déjà indexés et à jour !")
             stats = self.indexer.get_stats()
-            print(f"📊 Total vecteurs en base: {stats['total_chunks']}")
+            print(f"📊 Total vecteurs en base: {stats['total_count']}")
             return
         
         # Collecteur d'erreurs avec affichage immédiat
@@ -2303,7 +2432,7 @@ class TechnicalDocIndexer:
         print(f"   • Fichiers déjà à jour ignorés: {len(files_already_indexed)}")
         print(f"   • Chunks créés: {total_chunks}")
         print(f"   • Images traitées: {total_images_analyzed}")
-        print(f"   • Total vecteurs en base: {stats['total_chunks']}")
+        print(f"   • Total vecteurs en base: {stats['total_count']}")
         
         # Affichage du résumé des erreurs
         error_collector.print_summary()
@@ -2374,7 +2503,7 @@ class TechnicalDocIndexer:
                     print(f"🖼️  {total_images} images traitées")
                 
                 stats = self.indexer.get_stats()
-                print(f"📊 Vecteurs ajoutés: {stats['vectors_added_session']}, Total: {stats['total_chunks']}")
+                print(f"📊 Vecteurs ajoutés: {stats['vectors_added_session']}, Total: {stats['total_count']}")
                 
             except Exception as indexing_error:
                 error_collector.add_error(

@@ -16,22 +16,43 @@ graph TD
     F --> G[🎯 Réponse Contextualisée]
 ```
 
+## 🚀 Installation et prérequis
+
+### Prérequis système
+- **GPU requis** : CUDA (NVIDIA) ou MPS (Apple Silicon)
+- **Python** : 3.8+
+- **RAM** : 8GB minimum, 16GB recommandé
+- **Stockage** : 10GB+ selon la taille de la documentation
+
+### Installation
+```bash
+# Cloner le repository
+git clone https://github.com/user/LocalRagModel.git
+cd LocalRagModel
+
+# Installer les dépendances
+pip install -r requirements.txt
+
+# Vérifier l'installation GPU
+python -c "import torch; print(f'GPU disponible: {torch.cuda.is_available() or torch.backends.mps.is_available()}')"
+```
+
 ## 📋 Étapes du processus
 
 ### ✅ **Step 01 - Indexation** (`step01_indexer.py`)
 **Statut**: ✅ Implémenté et optimisé
 
-Transform la documentation brute en index vectoriel searchable.
+Transforme la documentation brute en index vectoriel searchable.
 
 ### ✅ **Step 02 - Upload Embeddings** (`step02_upload_embeddings.py`)  
-**Statut**: ✅ Implémenté et testé
+**Statut**: ✅ Implémenté, testé et optimisé
 
-Convertit l'index FAISS en SafeTensors et l'upload vers Hugging Face Hub.
+Convertit l'index FAISS en SafeTensors avec structure de métadonnées améliorée et upload vers Hugging Face Hub.
 
 ### ✅ **Step 03 - Interface Chat** (`step03_chatbot.py`)
-**Statut**: ✅ Implémenté et documenté
+**Statut**: ✅ Implémenté, optimisé et entièrement fonctionnel
 
-Interface de chat Gradio utilisant les embeddings de Step 02 avec génération Qwen3-8B.
+Interface de chat Gradio avec streaming utilisant les embeddings de Step 02 et génération Qwen3-4B-Instruct-2507.
 
 ---
 
@@ -80,11 +101,6 @@ graph LR
 - **Scalabilité** : Gestion de millions de vecteurs
 
 ### 🛠️ **Utilisation**
-
-#### Installation des dépendances
-```bash
-pip install -r requirements.txt
-```
 
 #### Indexation complète
 ```bash
@@ -147,182 +163,6 @@ faiss_index/
   "indexed_at": "2024-01-15T14:30:00",
   "chunk_content": "Contenu du segment..."
 }
-```
-
-### 🔧 **Architecture technique**
-
-#### Classes principales
-- **`TechnicalDocIndexer`** : Orchestrateur principal
-- **`UniversalDocumentParser`** : Parser unifié HTML/Markdown
-- **`VectorIndexer`** : Gestionnaire d'embeddings et FAISS
-- **`OllamaImageAnalyzer`** : Analyse multimodale des images
-- **`Qwen3Reranker`** : Reranking sémantique (step 02)
-
-#### Flux de données
-1. **Fichiers** → **Chunks** (Parser)
-2. **Chunks** → **Embeddings** (Qwen3)
-3. **Embeddings** → **Index FAISS** (VectorIndexer)
-4. **Métadonnées** → **JSON** (Tracking)
-
-### ⚡ **Optimisations**
-
-#### Gestion mémoire
-- **Nettoyage automatique** : Cache MPS vidé après chaque batch
-- **Batch adaptatif** : Taille ajustée selon GPU et longueur documents
-- **Streaming** : Traitement par petits lots pour éviter l'OOM
-
-#### Performance GPU
-- **Pas de fallback CPU** : Échec immédiat si GPU indisponible
-- **Flash Attention 2** : Accélération des transformers (CUDA)
-- **Precision mixte** : FP16 automatique sur GPU compatibles
-
-### 🚨 **Gestion d'erreurs**
-
-#### Robustesse
-- **Collecteur d'erreurs** : Catalogage centralisé des échecs
-- **Continuation** : Traitement des autres fichiers si un échoue
-- **Rapport détaillé** : Statistiques complètes en fin d'exécution
-
-#### Types d'erreurs gérées
-- Images manquantes ou corrompues
-- HTML malformé
-- Timeouts GPU
-- Erreurs d'encoding
-
----
-
-## 🤖 Step 03 - Interface de Chat Générique
-
-### 🎯 **Objectif**
-Offrir une interface de chat interactive qui utilise les embeddings générés à l'étape précédente pour répondre aux questions des utilisateurs avec un système RAG complet.
-
-### 🏗️ **Architecture**
-
-```mermaid
-graph LR
-    A[👤 Question] --> B[🔍 Recherche Vectorielle]
-    B --> C[🎯 Reranking Qwen3]
-    C --> D[📚 Documents Pertinents]
-    D --> E[💬 Génération Qwen3-8B]
-    E --> F[🎯 Réponse Contextualisée]
-```
-
-### ⚡ **Fonctionnalités principales**
-
-#### 🔄 **Chargement automatique depuis HF Hub**
-- Lecture automatique de la configuration Step 02
-- Téléchargement des embeddings SafeTensors
-- Reconstruction de l'index FAISS pour recherche haute performance
-
-#### 🎯 **Pipeline de recherche en 2 étapes**
-1. **Recherche initiale** : Sélection de 20 candidats par embedding
-2. **Reranking** : Affinage avec Qwen3-Reranker-4B pour sélectionner les documents les plus pertinents
-
-#### 💬 **Génération contextuelle**
-- **Modèle** : Qwen3-8B (8 milliards de paramètres)
-- **Méthode** : Génération basée sur le contexte des documents sélectionnés
-- **Format** : Réponses structurées avec références aux sources
-
-#### 🎨 **Interface utilisateur avancée**
-- **Framework** : Gradio avec design moderne
-- **Streaming** : Affichage en temps réel des étapes de traitement
-- **Contrôles** : Paramètres ajustables (nombre de documents, activation du reranking)
-- **Scores** : Visualisation des scores d'embedding et de reranking
-
-### 🛠️ **Utilisation**
-
-```bash
-# Prérequis : Avoir exécuté Step 01 et Step 02
-python step03_chatbot.py
-```
-
-L'interface sera accessible à `http://localhost:7860`
-
-### 🎛️ **Paramètres configurables**
-
-| Paramètre | Description | Valeur par défaut |
-|-----------|-------------|-------------------|
-| **Documents finaux** | Nombre de documents utilisés pour la génération | 3 |
-| **Reranking** | Activation du reranking Qwen3 | ✅ Activé |
-| **Flash Attention** | Accélération (auto-désactivé sur Mac) | Auto-détection |
-
-### 📊 **Performance**
-
-- **Recherche** : ~50ms pour 10k+ documents
-- **Reranking** : ~200ms pour 20 candidats
-- **Génération** : ~2-5s selon la longueur de réponse
-- **Mémoire** : ~8-12GB avec Qwen3-8B
-
-### 🔧 **Configuration technique**
-
-#### Plateformes supportées
-- **CUDA** : Accélération GPU complète avec Flash Attention
-- **MPS (Mac)** : Optimisations spécifiques pour Apple Silicon
-- **CPU** : Fallback automatique avec optimisations
-
-#### Modèles utilisés
-- **Embeddings** : Modèle configuré à Step 01 (Qwen3-Embedding-4B recommandé)
-- **Reranking** : Qwen3-Reranker-4B
-- **Génération** : Qwen3-8B
-
----
-
-## 📅 **Roadmap**
-
-### 🔧 **Step 04 - API REST** (À implémenter)
-- API FastAPI pour intégration
-- Endpoints de recherche et génération  
-- Authentification et rate limiting
-- Documentation OpenAPI
-
-### 🌐 **Step 05 - Déploiement** (À implémenter)
-- Conteneurisation Docker
-- Orchestration Kubernetes
-- Monitoring et observabilité
-- Scalabilité horizontale
-
----
-
-## 🛡️ **Sécurité et confidentialité**
-
-- **100% Local** : Aucune donnée envoyée vers des services externes
-- **Chiffrement** : Index FAISS peut être chiffré au repos
-- **Isolation** : Traitement en sandbox local
-- **Contrôle total** : Vos données restent sur votre infrastructure
-
----
-
-## 🤝 **Contribution**
-
-Le projet suit une architecture modulaire permettant des contributions ciblées :
-- **Step 01** : Optimisations d'indexation
-- **Step 02+** : Nouvelles étapes du pipeline
-- **Parsers** : Support de nouveaux formats
-- **Backends** : Intégration d'autres bases vectorielles
-
----
-
-## 📊 **Statistiques d'utilisation**
-
-Après indexation, le script affiche :
-- Nombre de fichiers traités
-- Chunks générés et indexés
-- Images analysées
-- Erreurs rencontrées
-- Temps de traitement total
-- Taille de l'index final
-
-**Exemple** :
-```
-✅ Indexation terminée !
-📊 Statistiques finales :
-   - Fichiers traités : 1,247
-   - Chunks générés : 12,458  
-   - Images analysées : 3,891
-   - Vecteurs indexés : 12,458
-   - Erreurs : 23 (1.8%)
-   - Durée totale : 4min 32s
-   - Index FAISS : 2.1 GB
 ```
 
 ---
@@ -413,49 +253,6 @@ dataset-repo/
 }
 ```
 
-### 🔄 **Réutilisation des embeddings**
-
-#### Téléchargement depuis HF Hub
-```python
-from huggingface_hub import hf_hub_download
-from safetensors.torch import load_file
-import json
-
-# Télécharger les fichiers
-embeddings_file = hf_hub_download(repo_id="username/repo", filename="embeddings.safetensors")
-metadata_file = hf_hub_download(repo_id="username/repo", filename="embeddings_metadata.json")
-
-# Charger les embeddings
-tensors = load_file(embeddings_file)
-embeddings = tensors['embeddings']  # torch.Tensor [n_vectors, dimension]
-
-# Charger métadonnées
-with open(metadata_file, 'r') as f:
-    metadata = json.load(f)
-```
-
-#### Recherche sémantique directe
-```python
-import torch.nn.functional as F
-
-def search_embeddings(query_embedding, embeddings, metadata, top_k=10):
-    """Recherche sémantique dans les embeddings uploadés."""
-    # Similarité cosinus
-    similarities = F.cosine_similarity(query_embedding.unsqueeze(0), embeddings, dim=1)
-    
-    # Top-K résultats
-    top_scores, top_indices = torch.topk(similarities, top_k)
-    
-    # Récupération des IDs originaux
-    ordered_ids = metadata['ordered_ids']
-    results = []
-    for idx, score in zip(top_indices, top_scores):
-        doc_id = ordered_ids[idx.item()]
-        results.append({'id': doc_id, 'score': score.item()})
-    
-    return results
-```
-
 ### 📈 **Avantages SafeTensors**
 
 #### vs. Format Pickle (.pkl)
@@ -471,35 +268,240 @@ def search_embeddings(query_embedding, embeddings, metadata, top_k=10):
 - **✅ Partage** : Distribution facile via HF Hub
 - **✅ Documentation** : README et métadonnées auto-générées
 
-### 🔒 **Sécurité et confidentialité**
+---
 
-#### Gestion des tokens
-- **Saisie masquée** : Token jamais affiché en clair
-- **Pas de stockage** : Token utilisé uniquement en mémoire
-- **HTTPS** : Communication chiffrée avec HF Hub
+## 🤖 Step 03 - Interface RAG avec MCP
 
-#### Contrôle d'accès
-- **Repository privé** : Accessible uniquement au propriétaire
-- **Repository public** : Disponible pour la communauté
-- **Token permissions** : Respecte les droits du token fourni
+### 🎯 **Objectif**
+Interface de chat Gradio complète avec streaming et serveur MCP intégré pour l'intégration directe dans Claude Desktop, VS Code et autres outils compatibles MCP.
 
-### 🎯 **Cas d'usage**
+### 🏗️ **Architecture**
 
-1. **Backup cloud** : Sauvegarde sécurisée des embeddings
-2. **Partage équipe** : Distribution des embeddings pré-calculés
-3. **Réplication** : Déploiement sur différents environnements  
-4. **Research** : Partage de datasets pour recherche
-5. **Production** : Intégration dans pipelines ML
+```mermaid
+graph LR
+    A[👤 Question] --> B[🔍 Recherche Vectorielle]
+    B --> C[🎯 Reranking Qwen3]
+    C --> D[📚 Documents Pertinents]
+    D --> E[💬 Génération Qwen3-4B Streaming]
+    E --> F[🎯 Réponse Contextualisée]
+```
 
-### ⚡ **Performance**
+### ⚡ **Fonctionnalités principales**
 
-#### Métriques typiques
-- **Conversion** : ~1M vecteurs/min (2560D)
-- **Upload** : Dépend de la bande passante
-- **Taille typique** : ~10MB/1K vecteurs (2560D, float32)
-- **Compression** : ~30% vs format FAISS original
+#### 🔄 **Chargement automatique depuis HF Hub**
+- Lecture automatique de la configuration Step 02
+- Téléchargement des embeddings SafeTensors
+- Reconstruction de l'index FAISS pour recherche haute performance
 
-#### Optimisations
-- **Streaming upload** : Upload par chunks pour gros datasets
-- **Compression automatique** : Git LFS pour fichiers volumineux
-- **Validation** : Checksum avant upload
+#### 🎯 **Pipeline de recherche en 2 étapes**
+1. **Recherche initiale** : Sélection de 20 candidats par embedding
+2. **Reranking** : Affinage avec Qwen3-Reranker-4B pour sélectionner les documents les plus pertinents
+
+#### 💬 **Génération contextuelle avec streaming**
+- **Modèle** : Qwen3-4B-Instruct-2507 (4 milliards de paramètres, optimisé)
+- **Méthode** : Génération streamée basée sur le contexte des documents sélectionnés
+- **Format** : Réponses structurées avec références aux sources et scores
+- **Streaming** : Affichage progressif token par token pour une expérience fluide
+
+#### 🔌 **Intégration MCP**
+- **Fonction exposée** : `ask_rag_question`
+- **Paramètres** : question (str), num_documents (1-10), use_reranking (bool)
+- **Compatible** : Claude Desktop, VS Code, Cursor IDE
+- **Protocol** : Model Control Protocol (MCP) v1.0
+
+#### 🎨 **Interface utilisateur avancée**
+- **Framework** : Gradio avec design moderne
+- **Streaming** : Affichage en temps réel des étapes de traitement
+- **Contrôles** : Paramètres ajustables (nombre de documents, activation du reranking)
+- **Scores** : Visualisation des scores d'embedding et de reranking
+
+### 🛠️ **Utilisation**
+
+#### Mode HTTP (développement)
+```bash
+# Prérequis : step03_config.json généré par Step 02
+python step03_chatbot.py
+```
+
+#### Mode HTTPS (pour Claude Desktop)
+```bash
+# Générer certificats SSL
+python step03_ssl_generator_optional.py
+
+# Configurer SSL
+export SSL_KEYFILE="$(pwd)/ssl_certs/localhost.key"
+export SSL_CERTFILE="$(pwd)/ssl_certs/localhost.crt"
+
+# Lancer avec HTTPS + MCP
+python step03_chatbot.py
+```
+
+**Accès :**
+- Interface web : `http://localhost:7860` (ou `https://localhost:7860` en SSL)
+- Serveur MCP : `http://localhost:7860/gradio_api/mcp/sse`
+
+### 🎛️ **Paramètres configurables**
+
+| Paramètre | Description | Valeur par défaut |
+|-----------|-------------|-------------------|
+| **Documents finaux** | Nombre de documents utilisés pour la génération | 3 |
+| **Reranking** | Activation du reranking Qwen3 | ✅ Activé |
+| **Flash Attention** | Accélération (auto-désactivé sur Mac) | Auto-détection |
+
+### 📊 **Performance**
+
+- **Recherche** : ~50ms pour 10k+ documents
+- **Reranking** : ~200ms pour 20 candidats
+- **Génération** : ~2-4s selon la longueur de réponse (streaming)
+- **Mémoire** : ~6-8GB avec Qwen3-4B (optimisé vs 8B)
+
+### 🔧 **Configuration technique**
+
+#### Plateformes supportées
+- **CUDA** : Accélération GPU complète avec Flash Attention
+- **MPS (Mac)** : Optimisations spécifiques pour Apple Silicon
+- **CPU** : Fallback automatique avec optimisations
+- **ZeroGPU** : Support Hugging Face Spaces avec décorateurs `@spaces.GPU`
+
+#### Modèles utilisés
+- **Embeddings** : Chargés depuis HF Hub (Qwen3-Embedding-4B recommandé)
+- **Reranking** : Qwen3-Reranker-4B
+- **Génération** : Qwen3-4B-Instruct-2507 via Transformers (compatible MPS)
+
+#### Configuration Claude Desktop
+Fichier `~/Library/Application Support/Claude/claude_desktop_config.json` :
+```json
+{
+  "mcpServers": {
+    "localrag": {
+      "command": "python",
+      "args": ["/path/to/LocalRagModel/step03_chatbot.py"],
+      "env": {
+        "SSL_KEYFILE": "/path/to/ssl_certs/localhost.key",
+        "SSL_CERTFILE": "/path/to/ssl_certs/localhost.crt",
+        "PYTHONPATH": "/path/to/LocalRagModel"
+      }
+    }
+  }
+}
+```
+
+---
+
+## 🔧 **Architecture technique**
+
+### Classes principales
+- **`TechnicalDocIndexer`** : Orchestrateur principal
+- **`UniversalDocumentParser`** : Parser unifié HTML/Markdown
+- **`VectorIndexer`** : Gestionnaire d'embeddings et FAISS
+- **`OllamaImageAnalyzer`** : Analyse multimodale des images
+- **`Qwen3Reranker`** : Reranking sémantique
+
+### Flux de données
+1. **Fichiers** → **Chunks** (Parser)
+2. **Chunks** → **Embeddings** (Qwen3)
+3. **Embeddings** → **Index FAISS** (VectorIndexer)
+4. **Métadonnées** → **JSON** (Tracking)
+
+### ⚡ **Optimisations**
+
+#### Gestion mémoire
+- **Nettoyage automatique** : Cache MPS vidé après chaque batch
+- **Batch adaptatif** : Taille ajustée selon GPU et longueur documents
+- **Streaming** : Traitement par petits lots pour éviter l'OOM
+
+#### Performance GPU
+- **Pas de fallback CPU** : Échec immédiat si GPU indisponible
+- **Flash Attention 2** : Accélération des transformers (CUDA)
+- **Precision mixte** : FP16 automatique sur GPU compatibles
+
+### 🚨 **Gestion d'erreurs**
+
+#### Robustesse
+- **Collecteur d'erreurs** : Catalogage centralisé des échecs
+- **Continuation** : Traitement des autres fichiers si un échoue
+- **Rapport détaillé** : Statistiques complètes en fin d'exécution
+
+#### Types d'erreurs gérées
+- Images manquantes ou corrompues
+- HTML malformé
+- Timeouts GPU
+- Erreurs d'encoding
+
+---
+
+## 🆕 **Améliorations récentes**
+
+### ✅ **Corrections majeures (v1.1)**
+- **🔧 Reranking fonctionnel** : Correction du mapping métadonnées qui causait des scores uniformes
+- **📊 Validation d'intégrité** : Nouveau système de validation automatique du mapping index ↔ métadonnées
+- **🏗️ Structure métadonnées optimisée** : Séparation claire entre métadonnées techniques et de contenu
+- **🔄 Streaming implémenté** : Génération de réponse progressive token par token
+- **⚡ Modèle optimisé** : Migration vers Qwen3-4B-Instruct-2507 (plus léger, compatible MPS)
+- **🛠️ Gestion d'erreurs robuste** : Upload avec reporting détaillé des échecs
+
+### 🎯 **Résultats**
+- **Reranking** : Scores variables et pertinents (fini les 0.091 uniformes)
+- **Performance** : -25% mémoire avec Qwen3-4B vs 8B
+- **UX** : Réponses streamées pour une expérience fluide
+- **Fiabilité** : Validation automatique détecte les problèmes de mapping
+
+---
+
+## 📅 **Roadmap**
+
+### 🔧 **Step 04 - API REST** (À implémenter)
+- API FastAPI pour intégration
+- Endpoints de recherche et génération  
+- Authentification et rate limiting
+- Documentation OpenAPI
+
+### 🌐 **Step 05 - Déploiement** (À implémenter)
+- Conteneurisation Docker
+- Orchestration Kubernetes
+- Monitoring et observabilité
+- Scalabilité horizontale
+
+---
+
+## 🛡️ **Sécurité et confidentialité**
+
+- **100% Local** : Aucune donnée envoyée vers des services externes
+- **Chiffrement** : Index FAISS peut être chiffré au repos
+- **Isolation** : Traitement en sandbox local
+- **Contrôle total** : Vos données restent sur votre infrastructure
+
+---
+
+## 📊 **Statistiques d'utilisation**
+
+Après indexation, le script affiche :
+- Nombre de fichiers traités
+- Chunks générés et indexés
+- Images analysées
+- Erreurs rencontrées
+- Temps de traitement total
+- Taille de l'index final
+
+**Exemple** :
+```
+✅ Indexation terminée !
+📊 Statistiques finales :
+   - Fichiers traités : 1,247
+   - Chunks générés : 12,458  
+   - Images analysées : 3,891
+   - Vecteurs indexés : 12,458
+   - Erreurs : 23 (1.8%)
+   - Durée totale : 4min 32s
+   - Index FAISS : 2.1 GB
+```
+
+---
+
+## 🤝 **Contribution**
+
+Le projet suit une architecture modulaire permettant des contributions ciblées :
+- **Step 01** : Optimisations d'indexation
+- **Step 02+** : Nouvelles étapes du pipeline
+- **Parsers** : Support de nouveaux formats
+- **Backends** : Intégration d'autres bases vectorielles

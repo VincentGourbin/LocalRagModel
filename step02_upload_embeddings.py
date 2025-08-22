@@ -154,15 +154,29 @@ class EmbeddingUploader:
             metadata_dict['ordered_ids'] = ordered_ids
             metadata_dict['id_to_idx'] = id_to_idx
         
-        # Ajouter des métadonnées techniques
-        metadata_dict.update({
+        # Séparer les métadonnées techniques des métadonnées de contenu
+        content_metadata = {k: v for k, v in metadata_dict.items() 
+                           if k not in ['ordered_ids', 'id_to_idx'] and not k.startswith('_')}
+        
+        # Créer la structure finale avec séparation claire
+        final_metadata = {
+            # Métadonnées techniques (système)
             'format_version': '1.0',
             'total_vectors': n_vectors,
             'vector_dimension': dimension,
             'faiss_index_type': 'HNSW',
             'conversion_timestamp': datetime.now().isoformat(),
-            'embedding_model': 'Qwen/Qwen3-Embedding-4B'  # À adapter selon config
-        })
+            'embedding_model': 'Qwen/Qwen3-Embedding-4B',  # À adapter selon config
+            
+            # Mappings (système)
+            'ordered_ids': metadata_dict.get('ordered_ids', []),
+            'id_to_idx': metadata_dict.get('id_to_idx', {}),
+            
+            # Métadonnées de contenu (données)
+            'content_metadata': content_metadata
+        }
+        
+        metadata_dict = final_metadata
         
         print("✅ Conversion terminée")
         print(f"  📊 Tenseurs: {list(tensors_dict.keys())}")
@@ -214,12 +228,14 @@ class EmbeddingUploader:
             try:
                 # Sauvegarder les tenseurs en SafeTensors
                 print("  💾 Sauvegarde SafeTensors...")
-                safetensors_file = temp_dir / f"{dataset_name}.safetensors"
+                # Nettoyer le nom du dataset pour les noms de fichiers
+                clean_dataset_name = dataset_name.replace("/", "_").replace(" ", "_").replace("-", "_")
+                safetensors_file = temp_dir / f"{clean_dataset_name}.safetensors"
                 save_file(tensors_dict, str(safetensors_file))
                 
                 # Sauvegarder les métadonnées en JSON
                 print("  💾 Sauvegarde métadonnées...")
-                metadata_file = temp_dir / f"{dataset_name}_metadata.json"
+                metadata_file = temp_dir / f"{clean_dataset_name}_metadata.json"
                 with open(metadata_file, 'w', encoding='utf-8') as f:
                     json.dump(metadata_dict, f, ensure_ascii=False, indent=2)
                 
@@ -232,22 +248,49 @@ class EmbeddingUploader:
                 print("  📤 Upload fichiers...")
                 
                 files_to_upload = [
-                    (safetensors_file, f"{dataset_name}.safetensors"),
-                    (metadata_file, f"{dataset_name}_metadata.json"),
+                    (safetensors_file, f"embeddings.safetensors"),
+                    (metadata_file, f"embeddings_metadata.json"),
                     (readme_file, "README.md")
                 ]
                 
+                upload_results = []
                 for local_file, remote_path in files_to_upload:
                     print(f"    📤 {remote_path}...")
-                    upload_file(
-                        path_or_fileobj=str(local_file),
-                        path_in_repo=remote_path,
-                        repo_id=repo_name,
-                        repo_type="dataset",
-                        token=self.hf_token
-                    )
+                    try:
+                        # Vérifier que le fichier existe avant upload
+                        if not local_file.exists():
+                            raise FileNotFoundError(f"Fichier local non trouvé: {local_file}")
+                        
+                        # Afficher la taille du fichier pour debug
+                        file_size = local_file.stat().st_size / (1024 * 1024)  # MB
+                        print(f"       Taille: {file_size:.1f}MB")
+                        
+                        upload_file(
+                            path_or_fileobj=str(local_file),
+                            path_in_repo=remote_path,
+                            repo_id=repo_name,
+                            repo_type="dataset",
+                            token=self.hf_token
+                        )
+                        print(f"       ✅ {remote_path} uploadé avec succès")
+                        upload_results.append((remote_path, True, None))
+                        
+                    except Exception as upload_error:
+                        print(f"       ❌ Erreur upload {remote_path}: {upload_error}")
+                        upload_results.append((remote_path, False, str(upload_error)))
                 
-                print("✅ Upload terminé avec succès !")
+                # Vérifier les résultats d'upload
+                failed_uploads = [result for result in upload_results if not result[1]]
+                if failed_uploads:
+                    print(f"\n⚠️  {len(failed_uploads)} fichier(s) ont échoué:")
+                    for filename, success, error in failed_uploads:
+                        print(f"  ❌ {filename}: {error}")
+                    print("\n💡 Solutions possibles:")
+                    print("  - Vérifier la connexion internet")
+                    print("  - Vérifier les permissions du token HF")
+                    print("  - Réessayer l'upload")
+                else:
+                    print("✅ Tous les fichiers uploadés avec succès !")
                 
                 # Informations de téléchargement
                 print(f"\n📋 Informations du dataset:")
@@ -270,108 +313,6 @@ class EmbeddingUploader:
             print(f"❌ Erreur lors de l'upload: {e}")
             raise
     
-    def _create_dataset_readme(self, readme_file: Path, repo_name: str, dataset_name: str, metadata_dict: Dict):
-        """Créer un README descriptif pour le dataset."""
-        content = f"""---
-title: {repo_name}
-emoji: 🔍
-colorFrom: blue
-colorTo: green
-sdk: static
-app_file: README.md
-pinned: false
-license: apache-2.0
-tags:
-- embeddings
-- faiss
-- rag
-- semantic-search
-- safetensors
----
-
-# 🔍 {repo_name} - Embeddings Dataset
-
-## Description
-
-Ce dataset contient des embeddings vectoriels générés par le système LocalRAG pour la recherche sémantique dans la documentation technique.
-
-## 📊 Statistiques
-
-- **Format**: SafeTensors
-- **Vecteurs**: {metadata_dict.get('total_vectors', 'N/A'):,}
-- **Dimension**: {metadata_dict.get('vector_dimension', 'N/A')}
-- **Modèle d'embedding**: {metadata_dict.get('embedding_model', 'N/A')}
-- **Type d'index**: {metadata_dict.get('faiss_index_type', 'N/A')}
-- **Généré le**: {metadata_dict.get('conversion_timestamp', 'N/A')}
-
-## 📁 Contenu
-
-- `{dataset_name}.safetensors`: Embeddings vectoriels au format SafeTensors
-- `{dataset_name}_metadata.json`: Métadonnées complètes avec mappings
-- `README.md`: Cette documentation
-
-## 🚀 Utilisation
-
-### Chargement avec Hugging Face Hub
-
-```python
-from huggingface_hub import hf_hub_download
-from safetensors.torch import load_file
-import json
-
-# Télécharger les fichiers
-embeddings_file = hf_hub_download(repo_id="{repo_name}", filename="{dataset_name}.safetensors")
-metadata_file = hf_hub_download(repo_id="{repo_name}", filename="{dataset_name}_metadata.json")
-
-# Charger les embeddings
-tensors = load_file(embeddings_file)
-embeddings = tensors['embeddings']  # Shape: [n_vectors, dimension]
-
-# Charger les métadonnées
-with open(metadata_file, 'r') as f:
-    metadata = json.load(f)
-
-print(f"Embeddings shape: {{embeddings.shape}}")
-print(f"Total vectors: {{metadata['total_vectors']}}")
-```
-
-### Recherche sémantique
-
-```python
-import torch
-import torch.nn.functional as F
-
-def semantic_search(query_embedding, embeddings, top_k=10):
-    \"\"\"Recherche sémantique dans les embeddings.\"\"\"
-    # Calcul de similarité cosinus
-    similarities = F.cosine_similarity(query_embedding.unsqueeze(0), embeddings, dim=1)
-    
-    # Top-K résultats
-    top_scores, top_indices = torch.topk(similarities, top_k)
-    
-    return top_indices, top_scores
-
-# Exemple d'utilisation
-query_emb = torch.randn(1, {metadata_dict.get('vector_dimension', 'dimension')})  # Votre embedding de requête
-indices, scores = semantic_search(query_emb, embeddings)
-```
-
-## 🔧 Généré par
-
-Ce dataset a été généré par [LocalRAG](https://github.com/your-repo/LocalRAG), un système RAG local complet pour la documentation technique.
-
-- **Step 01**: Indexation vectorielle avec FAISS
-- **Step 02**: Conversion SafeTensors et upload HF Hub
-- **Step 03**: Recherche sémantique (à venir)
-- **Step 04**: Génération RAG (à venir)
-
-## 📝 License
-
-Apache 2.0 - Voir LICENSE pour plus de détails.
-"""
-        
-        with open(readme_file, 'w', encoding='utf-8') as f:
-            f.write(content)
     
     def _save_step03_config(self, repo_name: str, dataset_name: str, metadata_dict: Dict):
         """Sauvegarde la configuration pour Step 03."""
@@ -484,6 +425,36 @@ print(f"Embeddings shape: {{embeddings.shape}}")
 print(f"Total vectors: {{metadata['total_vectors']}}")
 ```
 
+### Recherche sémantique
+
+```python
+import torch
+import torch.nn.functional as F
+
+def semantic_search(query_embedding, embeddings, top_k=10):
+    \"\"\"Recherche sémantique dans les embeddings.\"\"\"
+    # Calcul de similarité cosinus
+    similarities = F.cosine_similarity(query_embedding.unsqueeze(0), embeddings, dim=1)
+    
+    # Top-K résultats
+    top_scores, top_indices = torch.topk(similarities, top_k)
+    
+    return top_indices, top_scores
+
+# Exemple d'utilisation
+query_emb = torch.randn(1, {metadata_dict.get('vector_dimension', 'dimension')})  # Votre embedding de requête
+indices, scores = semantic_search(query_emb, embeddings)
+```
+
+## 🔧 Généré par
+
+Ce dataset a été généré par [LocalRAG](https://github.com/your-repo/LocalRAG), un système RAG local complet pour la documentation technique.
+
+- **Step 01**: Indexation vectorielle avec FAISS
+- **Step 02**: Conversion SafeTensors et upload HF Hub
+- **Step 03**: Recherche sémantique avec MCP
+- **Step 04**: Génération RAG complète
+
 ## 📝 License
 
 Apache 2.0 - Voir LICENSE pour plus de détails.
@@ -491,6 +462,7 @@ Apache 2.0 - Voir LICENSE pour plus de détails.
         
         with open(readme_file, 'w', encoding='utf-8') as f:
             f.write(content)
+    
 
 
 def get_user_inputs() -> Tuple[str, str, str, bool]:
@@ -511,6 +483,11 @@ def get_user_inputs() -> Tuple[str, str, str, bool]:
     
     # Nom du dataset
     dataset_name = input("📊 Nom du dataset [embeddings]: ").strip() or "embeddings"
+    
+    # Validation du nom du dataset (doit être compatible avec les noms de fichiers)
+    if any(char in dataset_name for char in ['/', '\\', ':', '*', '?', '"', '<', '>', '|']):
+        print("⚠️ Le nom du dataset contient des caractères interdits. Utilisation de 'embeddings'")
+        dataset_name = "embeddings"
     
     # Repository privé
     private_input = input("🔒 Repository privé ? (y/N): ").strip().lower()

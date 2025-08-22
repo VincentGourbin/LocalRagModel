@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Step 03 - Interface de chat RAG générique avec Gradio
-Utilise les embeddings de Step 02 depuis Hugging Face Hub + Qwen3-8B pour génération
+Utilise les embeddings de Step 02 depuis Hugging Face Hub + Qwen3-4B-Instruct-2507 pour génération
 """
 
 import os
@@ -384,10 +384,10 @@ class Qwen3Reranker:
 
 
 class GenericRAGChatbot:
-    """Chatbot RAG générique utilisant les embeddings de Step 02 et Qwen3-8B pour la génération"""
+    """Chatbot RAG générique utilisant les embeddings de Step 02 et Qwen3-4B-Instruct pour la génération"""
     
     def __init__(self, 
-                 generation_model: str = "Qwen/Qwen3-8B",
+                 generation_model: str = "Qwen/Qwen3-4B-Instruct-2507",
                  initial_k: int = 20,
                  final_k: int = 3,
                  use_flash_attention: bool = True,
@@ -412,6 +412,14 @@ class GenericRAGChatbot:
         self.is_zerogpu = ZEROGPU_AVAILABLE and os.getenv("SPACE_ID") is not None
         self.is_mps = torch.backends.mps.is_available() and not self.is_zerogpu
         self.is_cuda = torch.cuda.is_available()
+        
+        # Configuration du device
+        if self.is_mps:
+            self.device = torch.device("mps")
+        elif self.is_cuda:
+            self.device = torch.device("cuda")
+        else:
+            self.device = torch.device("cpu")
         
         if self.is_zerogpu:
             print("🚀 Environnement ZeroGPU détecté - optimisations cloud")
@@ -536,9 +544,11 @@ class GenericRAGChatbot:
             # Ajouter les vecteurs à l'index
             self.faiss_index.add(embeddings_np)
             
-            # Récupérer les mappings
+            # Récupérer les mappings et métadonnées de contenu
             self.ordered_ids = self.metadata.get('ordered_ids', [])
             self.id_to_idx = self.metadata.get('id_to_idx', {})
+            self.content_metadata = self.metadata.get('content_metadata', {})
+            
             
             print(f"✅ Embeddings chargés: {embeddings_np.shape[0]:,} vecteurs de dimension {dimension}")
             
@@ -609,7 +619,7 @@ class GenericRAGChatbot:
             print("⚠️ Reranking désactivé par configuration")
 
     def _load_generation_model(self):
-        """Charge le modèle de génération Qwen3-8B"""
+        """Charge le modèle de génération Qwen3-4B-Instruct"""
         print(f"🔄 Chargement du modèle de génération {self.generation_model_name}...")
         
         try:
@@ -726,7 +736,7 @@ class GenericRAGChatbot:
         for i, (distance, idx) in enumerate(zip(distances[0], indices[0])):
             if idx < len(self.ordered_ids):
                 doc_id = self.ordered_ids[idx]
-                doc_metadata = self.metadata.get(doc_id, {})
+                doc_metadata = self.content_metadata.get(doc_id, {})
                 
                 # Ajustement des scores selon le type d'index
                 if self.is_mps:
@@ -739,7 +749,7 @@ class GenericRAGChatbot:
                     embedding_score = 1 - embedding_distance
                 
                 doc = {
-                    'content': doc_metadata.get('content', 'Contenu non disponible'),
+                    'content': doc_metadata.get('chunk_content', 'Contenu non disponible'),
                     'metadata': doc_metadata,
                     'embedding_distance': embedding_distance,
                     'embedding_score': embedding_score,
@@ -755,6 +765,8 @@ class GenericRAGChatbot:
             print("🎯 Application du reranking Qwen3...")
             
             documents = [doc['content'] for doc in initial_results]
+            
+            
             rerank_scores = self.reranker.rerank(query, documents)
             
             # Ajout des scores de reranking
@@ -782,6 +794,81 @@ class GenericRAGChatbot:
         return final_results
 
     @spaces.GPU(duration=120)  # ZeroGPU: alloue GPU pour 120s max pour génération
+    def generate_response_stream(self, query: str, context: str, history: List = None):
+        """
+        Génère une réponse streamée basée sur le contexte et l'historique
+        """
+        if self.generation_model is None or self.generation_tokenizer is None:
+            yield "❌ Modèle de génération non disponible"
+            return
+        
+        # Construction du prompt système
+        system_prompt = """Tu es un assistant expert qui répond aux questions en te basant uniquement sur les documents fournis dans le contexte.
+
+Instructions importantes:
+- Réponds en français de manière claire et précise
+- Base-toi uniquement sur les informations du contexte fourni
+- Si l'information n'est pas dans le contexte, dis-le clairement
+- Utilise un ton professionnel adapté au domaine
+- Structure ta réponse avec des paragraphes clairs"""
+        
+        # Construire le prompt complet
+        messages = [{"role": "system", "content": system_prompt}]
+        
+        # Ajouter l'historique si fourni
+        if history:
+            for msg in history:
+                if hasattr(msg, 'role') and hasattr(msg, 'content'):
+                    messages.append({"role": msg.role, "content": msg.content})
+        
+        # Ajouter le contexte et la question
+        user_message = f"Contexte:\n{context}\n\nQuestion: {query}"
+        messages.append({"role": "user", "content": user_message})
+        
+        try:
+            # Tokenisation
+            inputs = self.generation_tokenizer.apply_chat_template(
+                messages,
+                tokenize=True,
+                add_generation_prompt=True,
+                return_tensors="pt"
+            ).to(self.device)
+            
+            # Génération streamée
+            from transformers import TextIteratorStreamer
+            import threading
+            
+            streamer = TextIteratorStreamer(
+                self.generation_tokenizer,
+                timeout=10.0,
+                skip_prompt=True,
+                skip_special_tokens=True
+            )
+            
+            generation_kwargs = {
+                "input_ids": inputs,
+                "streamer": streamer,
+                "max_new_tokens": 1024,
+                "temperature": 0.7,
+                "do_sample": True,
+                "pad_token_id": self.generation_tokenizer.eos_token_id,
+                "eos_token_id": self.generation_tokenizer.eos_token_id,
+            }
+            
+            # Lancer la génération dans un thread séparé
+            thread = threading.Thread(target=self.generation_model.generate, kwargs=generation_kwargs)
+            thread.start()
+            
+            # Streamer les tokens
+            for new_token in streamer:
+                yield new_token
+            
+            thread.join()
+            
+        except Exception as e:
+            yield f"❌ Erreur lors de la génération: {str(e)}"
+
+    @spaces.GPU(duration=120)  # ZeroGPU: alloue GPU pour 120s max pour génération  
     def generate_response(self, query: str, context: str, history: List = None) -> str:
         """
         Génère une réponse basée sur le contexte et l'historique
@@ -941,25 +1028,35 @@ Réponds à cette question en te basant sur le contexte fourni."""
 
         context = "\n\n".join(context_parts)
         
-        # 6. Génération de la réponse avec Qwen3-8B
+        # 6. Génération de la réponse avec Qwen3-4B
         history.append(ChatMessage(
             role="assistant",
             content="Génération de la réponse basée sur les documents sélectionnés...",
-            metadata={"title": "🤖 Génération avec Qwen3-8B"}
+            metadata={"title": "🤖 Génération avec Qwen3-4B"}
         ))
         yield history
         
         time.sleep(0.2)
         
-        # Génération de la réponse
-        response = self.generate_response(query, context, history)
-        
-        # Ajout de la réponse générée
+        # Génération streamée de la réponse
         history.append(ChatMessage(
-            role="assistant",
-            content=response
+            role="assistant", 
+            content="",  # Commencer avec un contenu vide
+            metadata={"title": "🤖 Réponse générée"}
         ))
-        yield history
+        
+        # Streamer la réponse token par token
+        current_response = ""
+        for token in self.generate_response_stream(query, context, history[:-1]):  # Exclure le dernier message vide
+            current_response += token
+            # Mettre à jour le dernier message avec la réponse en cours
+            history[-1] = ChatMessage(
+                role="assistant",
+                content=current_response,
+                metadata={"title": "🤖 Réponse générée"}
+            )
+            yield history
+            time.sleep(0.01)  # Petit délai pour un streaming fluide
         
         time.sleep(0.2)
         
@@ -1201,7 +1298,7 @@ def main():
                 
                 gr.Markdown(f"**Système RAG complet avec modèles Qwen3 de dernière génération**")
                 gr.Markdown(env_info)
-                gr.Markdown(f"🧠 {rag_system.config.embedding_model.split('/')[-1]} • 🎯 Qwen3-Reranker-4B • 💬 Qwen3-8B • ⚡ Recherche en 2 étapes")
+                gr.Markdown(f"🧠 {rag_system.config.embedding_model.split('/')[-1]} • 🎯 Qwen3-Reranker-4B • 💬 Qwen3-4B • ⚡ Recherche en 2 étapes")
                 gr.Markdown(f"📦 Repository: `{rag_system.config.repo_id}` | 📊 Vecteurs: **{rag_system.config.total_vectors:,}**")
         
         # Interface de chat
@@ -1282,7 +1379,7 @@ def main():
             - **📥 Step 02 :** Embeddings chargés depuis Hugging Face Hub au format SafeTensors
             - **🔍 Recherche :** Index FAISS reconstructé pour recherche vectorielle haute performance
             - **🎯 Reranking :** Qwen3-Reranker-4B pour affiner la sélection des documents
-            - **💬 Génération :** Qwen3-8B pour des réponses contextuelles de qualité
+            - **💬 Génération :** Qwen3-4B-Instruct-2507 pour des réponses contextuelles optimisées
             {env_docs}
             ### 📊 Lecture des scores
             
