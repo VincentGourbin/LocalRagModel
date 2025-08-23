@@ -8,6 +8,21 @@ import os
 import json
 import numpy as np
 import gradio as gr
+
+# Import spaces pour ZeroGPU compatibility
+try:
+    import spaces
+except ImportError:
+    # Fallback pour environnements non-ZeroGPU
+    class spaces:
+        @staticmethod
+        def GPU(duration=60):
+            def decorator(func):
+                return func
+            return decorator
+
+# Désactiver le warning tokenizers sur ZeroGPU
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 from gradio import ChatMessage
 from typing import List, Dict, Optional, Tuple
 import time
@@ -153,7 +168,7 @@ class Qwen3Reranker:
     Reranker utilisant Qwen3-Reranker-4B pour améliorer la pertinence des résultats de recherche
     """
     
-    def __init__(self, model_name: str = "Qwen/Qwen3-Reranker-4B", use_flash_attention: bool = True):
+    def __init__(self, model_name: str = "Qwen/Qwen3-Reranker-4B", use_flash_attention: bool = False):
         """
         Initialise le reranker Qwen3
         
@@ -162,7 +177,7 @@ class Qwen3Reranker:
             use_flash_attention: Utiliser Flash Attention 2 si disponible (auto-désactivé sur Mac)
         """
         self.model_name = model_name
-        self.use_flash_attention = use_flash_attention
+        self.use_flash_attention = False  # Désactivé pour éviter les problèmes
         
         # Détection de l'environnement
         self.is_mps = torch.backends.mps.is_available()
@@ -197,10 +212,11 @@ class Qwen3Reranker:
             
             # Chargement du tokenizer
             print("  - Chargement du tokenizer...")
-            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name, trust_remote_code=True)
             
             # Configuration du modèle selon la plateforme
             model_kwargs = self._get_model_config()
+            model_kwargs['trust_remote_code'] = True  # Requis pour Qwen3-Reranker
             
             # Chargement du modèle
             print("  - Chargement du modèle...")
@@ -234,6 +250,7 @@ class Qwen3Reranker:
         elif self.is_cuda:
             # Configuration pour CUDA
             config["torch_dtype"] = torch.float16
+            config["device_map"] = "auto"  # Toujours utiliser auto pour CUDA
             if self.use_flash_attention:
                 try:
                     config["attn_implementation"] = "flash_attention_2"
@@ -241,8 +258,6 @@ class Qwen3Reranker:
                 except Exception:
                     print("  - Flash Attention 2 non disponible, utilisation standard")
                     self.use_flash_attention = False
-            else:
-                config["device_map"] = "auto"
         else:
             # Configuration pour CPU
             config["torch_dtype"] = torch.float32
@@ -256,12 +271,14 @@ class Qwen3Reranker:
             self.device = torch.device("mps")
             self.model = self.model.to(self.device)
         elif self.is_cuda:
+            # Utiliser CUDA si disponible
             if hasattr(self.model, 'device'):
                 self.device = next(self.model.parameters()).device
             else:
                 self.device = torch.device("cuda")
                 self.model = self.model.to(self.device)
         else:
+            # Fallback CPU
             self.device = torch.device("cpu")
             self.model = self.model.to(self.device)
     
@@ -323,7 +340,6 @@ class Qwen3Reranker:
         import gc
         gc.collect()
     
-    @spaces.GPU(duration=60)  # ZeroGPU: alloue GPU pour 60s max pour reranking
     def rerank(self, query: str, documents: List[str], instruction: str = None) -> List[float]:
         """
         Reranke une liste de documents par rapport à une requête
@@ -335,6 +351,8 @@ class Qwen3Reranker:
             print("  - Reranker non disponible, scores neutres retournés")
             return [0.5] * len(documents)
         
+        # Le reranker fonctionne sur son device d'origine
+        
         if instruction is None:
             instruction = self._get_default_instruction()
         
@@ -345,16 +363,27 @@ class Qwen3Reranker:
         
         for i, document in enumerate(documents):
             try:
+                if i == 0:  # Debug du premier document seulement
+                    print(f"    🔍 Debug document 1: longueur={len(document)} caractères")
+                    print(f"    🔍 Début du contenu: {document[:100]}...")
+                
                 score = self._process_single_document(query, document, instruction)
                 score = max(0.0, min(1.0, score))
                 scores.append(score)
                 successful_count += 1
                 
+                if i == 0:  # Debug du résultat
+                    print(f"    ✅ Score document 1: {score:.6f}")
+                
                 if (i + 1) % self.memory_cleanup_freq == 0:
                     self._cleanup_memory()
                 
             except Exception as doc_error:
-                print(f"    ⚠️ Erreur document {i+1}: {doc_error}")
+                print(f"    ⚠️ Erreur document {i+1}: {type(doc_error).__name__}: {doc_error}")
+                if i == 0:  # Debug plus détaillé pour le premier document
+                    import traceback
+                    print(f"    📍 Traceback complet:")
+                    traceback.print_exc()
                 scores.append(0.5)  # Score neutre en cas d'erreur
         
         self._cleanup_memory()
@@ -390,7 +419,7 @@ class GenericRAGChatbot:
                  generation_model: str = "Qwen/Qwen3-4B-Instruct-2507",
                  initial_k: int = 20,
                  final_k: int = 3,
-                 use_flash_attention: bool = True,
+                 use_flash_attention: bool = False,
                  use_reranker: bool = True):
         """
         Initialise le système RAG générique
@@ -405,7 +434,7 @@ class GenericRAGChatbot:
         self.generation_model_name = generation_model
         self.initial_k = initial_k
         self.final_k = final_k
-        self.use_flash_attention = use_flash_attention
+        self.use_flash_attention = False  # Désactivé pour éviter les problèmes
         self.use_reranker = use_reranker
         
         # Détection de l'environnement (local + ZeroGPU)
@@ -423,7 +452,8 @@ class GenericRAGChatbot:
         
         if self.is_zerogpu:
             print("🚀 Environnement ZeroGPU détecté - optimisations cloud")
-            self.use_flash_attention = True  # ZeroGPU supporte Flash Attention
+            self.use_flash_attention = False  # Désactiver Flash Attention temporairement sur ZeroGPU
+            # Sur ZeroGPU, utiliser CPU pour embedding/reranking, GPU seulement pour génération
         elif self.is_mps and use_flash_attention:
             print("🍎 Mac avec MPS détecté - désactivation automatique de Flash Attention")
             self.use_flash_attention = False
@@ -506,6 +536,10 @@ class GenericRAGChatbot:
             print("  📥 Chargement des embeddings SafeTensors...")
             tensors = load_file(embeddings_file)
             embeddings_tensor = tensors["embeddings"]
+            
+            # Assurer que le tensor est sur CPU pour la conversion numpy
+            if embeddings_tensor.is_cuda:
+                embeddings_tensor = embeddings_tensor.cpu()
             embeddings_np = embeddings_tensor.numpy().astype(np.float32)
             
             print("  📋 Chargement des métadonnées...")
@@ -517,28 +551,14 @@ class GenericRAGChatbot:
             dimension = embeddings_np.shape[1]
             
             # Configuration d'index FAISS selon l'environnement
-            if self.is_zerogpu:
-                print("  🚀 Index FAISS optimisé pour ZeroGPU (IndexHNSWFlat)")
-                # Index sophistiqué pour ZeroGPU avec GPU puissant
-                self.faiss_index = faiss.IndexHNSWFlat(dimension, 32)
-                self.faiss_index.hnsw.efConstruction = 200
-                self.faiss_index.hnsw.efSearch = 50
-            elif self.is_mps:
-                print("  🍎 Index FAISS optimisé pour Mac (IndexFlatIP)")
-                # Index simple mais efficace sur Mac
-                self.faiss_index = faiss.IndexFlatIP(dimension)  # Inner Product (plus stable sur Mac)
-            else:
-                print("  🐧 Index FAISS HNSW pour Linux/Windows")
-                # Index plus sophistiqué pour autres plateformes
-                self.faiss_index = faiss.IndexHNSWFlat(dimension, 32)
-                self.faiss_index.hnsw.efConstruction = 200
-                self.faiss_index.hnsw.efSearch = 50
+            # UTILISER INDEXFLATIP PARTOUT pour consistance
+            print("  🔍 Index FAISS uniforme (IndexFlatIP) pour consistance")
+            self.faiss_index = faiss.IndexFlatIP(dimension)  # Inner Product uniforme
             
             # Normaliser les embeddings pour IndexFlatIP (équivalent à cosine similarity)
-            if self.is_mps:
-                # Normalisation L2 pour que IndexFlatIP = cosine similarity
-                norms = np.linalg.norm(embeddings_np, axis=1, keepdims=True)
-                embeddings_np = embeddings_np / (norms + 1e-8)  # Éviter division par 0
+            print("  📐 Normalisation L2 des embeddings...")
+            norms = np.linalg.norm(embeddings_np, axis=1, keepdims=True)
+            embeddings_np = embeddings_np / (norms + 1e-8)  # Éviter division par 0
             
             print(f"  📊 Ajout de {embeddings_np.shape[0]:,} vecteurs à l'index...")
             # Ajouter les vecteurs à l'index
@@ -570,6 +590,7 @@ class GenericRAGChatbot:
                         self.config.embedding_model,
                         model_kwargs={
                             "attn_implementation": "flash_attention_2", 
+                            "torch_dtype": torch.float16,  # Requis pour Flash Attention
                             "device_map": "auto"
                         },
                         tokenizer_kwargs={"padding_side": "left"}
@@ -628,6 +649,10 @@ class GenericRAGChatbot:
             # Chargement du tokenizer
             print("  - Chargement du tokenizer...")
             self.generation_tokenizer = AutoTokenizer.from_pretrained(self.generation_model_name)
+            
+            # Configuration correcte pour Qwen3
+            if self.generation_tokenizer.pad_token is None:
+                self.generation_tokenizer.pad_token = self.generation_tokenizer.eos_token
             
             # Configuration du modèle selon la plateforme
             model_kwargs = self._get_generation_model_config()
@@ -698,6 +723,7 @@ class GenericRAGChatbot:
         except:
             return 0.0
 
+    @spaces.GPU(duration=120)
     def search_documents(self, query: str, final_k: int = None, use_reranking: bool = None) -> List[Dict]:
         """
         Recherche avancée avec reranking en deux étapes
@@ -708,20 +734,25 @@ class GenericRAGChatbot:
         
         print(f"🔍 Recherche en deux étapes: {initial_k} candidats → reranking → {k} finaux")
         
+        # Les modèles d'embedding fonctionnent bien sur CPU sur ZeroGPU
+        
         # Étape 1: Recherche par embedding avec FAISS
+        print("  🎯 Calcul de l'embedding de la requête...")
         if hasattr(self.embedding_model, 'prompts') and 'query' in self.embedding_model.prompts:
-            query_embedding = self.embedding_model.encode([query], prompt_name="query")[0]
+            query_embedding = self.embedding_model.encode([query], prompt_name="query", show_progress_bar=False)[0]
         else:
-            query_embedding = self.embedding_model.encode([query])[0]
+            query_embedding = self.embedding_model.encode([query], show_progress_bar=False)[0]
+        
+        print(f"  📐 Embedding calculé: shape={query_embedding.shape}, norm={np.linalg.norm(query_embedding):.3f}")
         
         # Recherche dans l'index FAISS
         query_vector = query_embedding.reshape(1, -1).astype('float32')
         
-        # Normaliser la requête sur Mac pour IndexFlatIP (consistency avec les embeddings)
-        if self.is_mps:
-            norm = np.linalg.norm(query_vector)
-            if norm > 0:
-                query_vector = query_vector / norm
+        # Normaliser la requête pour IndexFlatIP (consistency avec les embeddings)
+        print("  📐 Normalisation de la requête...")
+        norm = np.linalg.norm(query_vector)
+        if norm > 0:
+            query_vector = query_vector / norm
         
         distances, indices = self.faiss_index.search(query_vector, initial_k)
         
@@ -738,15 +769,10 @@ class GenericRAGChatbot:
                 doc_id = self.ordered_ids[idx]
                 doc_metadata = self.content_metadata.get(doc_id, {})
                 
-                # Ajustement des scores selon le type d'index
-                if self.is_mps:
-                    # Sur Mac avec IndexFlatIP : distance = inner product (plus haut = plus similaire)
-                    embedding_score = float(distance)  # Inner product normalisé = cosine similarity
-                    embedding_distance = 1.0 - embedding_score  # Conversion en distance pour compatibilité
-                else:
-                    # Sur autres plateformes avec IndexHNSWFlat : distance euclidienne
-                    embedding_distance = float(distance)
-                    embedding_score = 1 - embedding_distance
+                # Interprétation uniforme pour IndexFlatIP
+                # IndexFlatIP retourne inner product normalisé = cosine similarity
+                embedding_score = float(distance)  # Inner product normalisé = cosine similarity
+                embedding_distance = 1.0 - embedding_score  # Conversion en distance pour compatibilité
                 
                 doc = {
                     'content': doc_metadata.get('chunk_content', 'Contenu non disponible'),
@@ -780,7 +806,8 @@ class GenericRAGChatbot:
             for i, doc in enumerate(initial_results):
                 doc['final_rank'] = i + 1
             
-            print(f"✅ Reranking appliqué, top 5 scores: {[f'{doc['rerank_score']:.3f}' for doc in initial_results[:5]]}")
+            top_scores = [f"{doc['rerank_score']:.3f}" for doc in initial_results[:5]]
+            print(f"✅ Reranking appliqué, top 5 scores: {top_scores}")
         else:
             print("⚠️ Reranking désactivé, utilisation des scores d'embedding uniquement")
             for doc in initial_results:
@@ -793,7 +820,7 @@ class GenericRAGChatbot:
         
         return final_results
 
-    @spaces.GPU(duration=120)  # ZeroGPU: alloue GPU pour 120s max pour génération
+    @spaces.GPU(duration=180)
     def generate_response_stream(self, query: str, context: str, history: List = None):
         """
         Génère une réponse streamée basée sur le contexte et l'historique
@@ -801,6 +828,11 @@ class GenericRAGChatbot:
         if self.generation_model is None or self.generation_tokenizer is None:
             yield "❌ Modèle de génération non disponible"
             return
+        
+        # Assurer que le modèle de génération est sur GPU dans ZeroGPU
+        if torch.cuda.is_available() and not next(self.generation_model.parameters()).is_cuda:
+            print("  - Déplacement du modèle de génération vers GPU...")
+            self.generation_model = self.generation_model.cuda()
         
         # Construction du prompt système
         system_prompt = """Tu es un assistant expert qui répond aux questions en te basant uniquement sur les documents fournis dans le contexte.
@@ -826,13 +858,23 @@ Instructions importantes:
         messages.append({"role": "user", "content": user_message})
         
         try:
-            # Tokenisation
-            inputs = self.generation_tokenizer.apply_chat_template(
+            # Utiliser le template officiel Qwen3 (documentation officielle)
+            formatted_prompt = self.generation_tokenizer.apply_chat_template(
                 messages,
-                tokenize=True,
-                add_generation_prompt=True,
-                return_tensors="pt"
-            ).to(self.device)
+                tokenize=False,
+                add_generation_prompt=True
+            )
+            
+            # Tokenisation
+            inputs = self.generation_tokenizer(
+                formatted_prompt,
+                return_tensors="pt",
+                truncation=True,
+                max_length=4096
+            )
+            
+            # Déplacement vers le device
+            inputs = {k: v.to(self.generation_device) for k, v in inputs.items()}
             
             # Génération streamée
             from transformers import TextIteratorStreamer
@@ -846,13 +888,17 @@ Instructions importantes:
             )
             
             generation_kwargs = {
-                "input_ids": inputs,
+                "input_ids": inputs["input_ids"],
+                "attention_mask": inputs["attention_mask"],
                 "streamer": streamer,
-                "max_new_tokens": 1024,
-                "temperature": 0.7,
+                "max_new_tokens": 1024,  # Recommandation officielle
+                "temperature": 0.7,      # Recommandation officielle
+                "top_p": 0.8,           # Recommandation officielle
+                "top_k": 20,            # Recommandation officielle
                 "do_sample": True,
-                "pad_token_id": self.generation_tokenizer.eos_token_id,
+                "pad_token_id": self.generation_tokenizer.pad_token_id,
                 "eos_token_id": self.generation_tokenizer.eos_token_id,
+                "use_cache": True
             }
             
             # Lancer la génération dans un thread séparé
@@ -868,7 +914,7 @@ Instructions importantes:
         except Exception as e:
             yield f"❌ Erreur lors de la génération: {str(e)}"
 
-    @spaces.GPU(duration=120)  # ZeroGPU: alloue GPU pour 120s max pour génération  
+    @spaces.GPU(duration=180)
     def generate_response(self, query: str, context: str, history: List = None) -> str:
         """
         Génère une réponse basée sur le contexte et l'historique
@@ -908,14 +954,14 @@ Réponds à cette question en te basant sur le contexte fourni."""
         
         # Formatage pour le modèle
         try:
-            # Appliquer le template de chat du modèle
+            # Utiliser le template officiel Qwen3 (documentation officielle)
             formatted_prompt = self.generation_tokenizer.apply_chat_template(
                 messages, 
                 tokenize=False, 
                 add_generation_prompt=True
             )
             
-            # Tokenisation
+            # Tokenisation avec les bonnes options
             inputs = self.generation_tokenizer(
                 formatted_prompt,
                 return_tensors="pt",
@@ -926,15 +972,19 @@ Réponds à cette question en te basant sur le contexte fourni."""
             # Déplacement vers le device
             inputs = {k: v.to(self.generation_device) for k, v in inputs.items()}
             
-            # Génération
+            # Génération avec paramètres officiels Qwen3
             with torch.no_grad():
                 outputs = self.generation_model.generate(
-                    **inputs,
-                    max_new_tokens=1024,
-                    temperature=0.7,
+                    input_ids=inputs["input_ids"],
+                    attention_mask=inputs["attention_mask"],
+                    max_new_tokens=1024,    # Recommandation officielle
+                    temperature=0.7,        # Recommandation officielle
+                    top_p=0.8,             # Recommandation officielle
+                    top_k=20,              # Recommandation officielle
                     do_sample=True,
-                    pad_token_id=self.generation_tokenizer.eos_token_id,
+                    pad_token_id=self.generation_tokenizer.pad_token_id,
                     eos_token_id=self.generation_tokenizer.eos_token_id,
+                    use_cache=True
                 )
             
             # Décodage de la réponse
@@ -949,6 +999,7 @@ Réponds à cette question en te basant sur le contexte fourni."""
             print(f"❌ Erreur lors de la génération: {e}")
             return f"❌ Erreur lors de la génération de la réponse: {str(e)}"
 
+    @spaces.GPU(duration=300)  # Durée plus longue car combine search + generation
     def stream_response_with_tools(self, query: str, history, top_k: int = None, use_reranking: bool = None):
         """
         Génère une réponse streamée avec affichage visuel des tools et reranking Qwen3
@@ -1107,9 +1158,10 @@ def _create_rag_system():
     # Paramètres par défaut optimisés selon l'environnement
     if is_zerogpu:
         default_config = {
-            'use_flash_attention': True,   # ZeroGPU supporte Flash Attention
+            'generation_model': "Qwen/Qwen3-4B-Instruct-2507",    # Modèle qui fonctionne sur ZeroGPU
+            'use_flash_attention': False,  # Désactivé pour stabilité
             'use_reranker': True,          # GPU puissant, reranking activé
-            'initial_k': 30,               # Plus de candidats avec GPU puissant
+            'initial_k': 20,               # Même config que local
             'final_k': 5                   # Plus de documents finaux
         }
     elif is_mac:
@@ -1121,7 +1173,7 @@ def _create_rag_system():
         }
     else:
         default_config = {
-            'use_flash_attention': is_cuda,  # Flash Attention seulement sur CUDA
+            'use_flash_attention': False,    # Désactivé pour stabilité
             'use_reranker': True,            # Reranking par défaut
             'initial_k': 20,                 # Candidats pour la première étape
             'final_k': 3                     # Documents finaux par défaut
@@ -1156,6 +1208,7 @@ def _ensure_chatmessages(history):
     return result
 
 
+@spaces.GPU(duration=300)  # Fonction principale de chat
 def chat_with_generic_rag(message, history, top_k, use_reranking):
     """
     Interface entre Gradio et le système RAG générique avec contrôles avancés.
@@ -1255,6 +1308,106 @@ def ask_rag_question(question: str = "Qu'est-ce que Swift MLX?", num_documents: 
         error_msg = f"❌ Erreur lors du traitement de la question: {str(e)}"
         print(error_msg)
         return error_msg
+
+
+def create_gradio_interface():
+    """Créé l'interface Gradio pour utilisation externe (Spaces)"""
+    # Initialisation du système RAG
+    global rag_system
+    try:
+        rag_system = _create_rag_system()
+    except Exception as e:
+        raise RuntimeError(f"Erreur d'initialisation RAG: {e}")
+    
+    # Configuration de l'interface Gradio avec thème Glass
+    with gr.Blocks(
+        title="🤖 LocalRAG Chat Générique",
+        theme=gr.themes.Glass(),
+    ) as demo:
+        
+        # En-tête simplifié avec composants Gradio natifs
+        with gr.Row():
+            with gr.Column():
+                gr.Markdown("# 🤖 Assistant RAG Générique LocalRAG")
+                gr.Markdown(f"📦 Repository: `{rag_system.config.repo_id}` | 📊 Vecteurs: **{rag_system.config.total_vectors:,}**")
+        
+        with gr.Row():
+            with gr.Column(scale=4):
+                chatbot = gr.Chatbot(
+                    label="💬 Conversation avec l'assistant",
+                    show_label=True,
+                    height=600,
+                    type="messages"
+                )
+                
+                msg = gr.Textbox(
+                    label="Votre question",
+                    placeholder="Posez votre question ici...",
+                    lines=1,
+                    max_lines=3
+                )
+                
+                with gr.Row():
+                    send_btn = gr.Button("Envoyer", variant="primary")
+                    clear_btn = gr.Button("Effacer", variant="secondary")
+            
+            with gr.Column(scale=1):
+                gr.Markdown("### ⚙️ Paramètres")
+                top_k_slider = gr.Slider(
+                    minimum=1,
+                    maximum=20,
+                    value=5,
+                    step=1,
+                    label="Nombre de documents (top-k)",
+                    info="Plus élevé = plus de contexte"
+                )
+                
+                reranking_checkbox = gr.Checkbox(
+                    label="Activer reranking Qwen3",
+                    value=True,
+                    info="Améliore la pertinence"
+                )
+                
+                gr.Markdown("### 📊 Statistiques")
+                gr.Markdown(f"""
+                - **Modèle embedding:** Qwen3-Embedding-4B
+                - **Modèle reranking:** Qwen3-Reranker-4B  
+                - **Modèle génération:** Qwen3-4B-Instruct-2507
+                - **Index FAISS:** HNSW optimisé
+                - **Vecteurs:** {rag_system.config.total_vectors:,}
+                """)
+        
+        # Interactions
+        def _clear_message():
+            return ""
+        
+        def _clear_chat():
+            return []
+        
+        # Envoi par Entrée
+        msg.submit(
+            chat_with_generic_rag,
+            [msg, chatbot, top_k_slider, reranking_checkbox],
+            chatbot
+        ).then(
+            _clear_message,
+            outputs=msg
+        )
+        
+        # Envoi par bouton
+        send_btn.click(
+            chat_with_generic_rag,
+            [msg, chatbot, top_k_slider, reranking_checkbox],
+            chatbot
+        ).then(
+            _clear_message,
+            outputs=msg
+        )
+        
+        # Effacement de la conversation
+        clear_btn.click(_clear_chat, outputs=chatbot)
+    
+    return demo
 
 
 def main():
