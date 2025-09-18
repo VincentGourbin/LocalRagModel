@@ -558,10 +558,10 @@ class MarkdownDocumentParser:
         md: Instance du processeur Markdown configuré
     """
     
-    def __init__(self, base_directory: str):
+    def __init__(self, base_directory: str, image_analyzer: OllamaImageAnalyzer = None):
         self.base_directory = Path(base_directory)
-        self.image_analyzer = OllamaImageAnalyzer()
-        
+        self.image_analyzer = image_analyzer or OllamaImageAnalyzer()
+
         # Configuration du processeur Markdown avec extensions
         self.md = markdown.Markdown(extensions=[
             'toc',           # Table des matières
@@ -941,9 +941,9 @@ class HTMLDocumentParser:
     """
     """Parser pour documents HTML techniques avec gestion d'erreurs robuste"""
     
-    def __init__(self, base_directory: str):
+    def __init__(self, base_directory: str, image_analyzer: OllamaImageAnalyzer = None):
         self.base_directory = Path(base_directory)
-        self.image_analyzer = OllamaImageAnalyzer()
+        self.image_analyzer = image_analyzer or OllamaImageAnalyzer()
         
     def parse_html_file(self, file_path: Path, error_collector: ErrorCollector = None) -> List[DocumentChunk]:
         """Parse un fichier HTML et extrait les chunks de contenu.
@@ -1829,40 +1829,76 @@ class VectorIndexer:
             print("❌ Aucun embedding généré")
             return
             
-        # Ajout à FAISS - performant et sans blocage
+        # Ajout à FAISS avec protection contre les segfaults MPS
         print(f"⚡ Ajout à FAISS...")
         try:
-            self.faiss_indexer.add_vectors(embeddings, ids, metadatas)
+            # Protection contre les conflits MPS/FAISS sur Mac
+            import torch
+            if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+                print("🔄 Conversion des embeddings MPS vers CPU pour compatibilité FAISS...")
+
+                # S'assurer que les embeddings sont en format CPU numpy
+                if isinstance(embeddings, torch.Tensor):
+                    embeddings_safe = embeddings.cpu().numpy().astype(np.float32)
+                elif isinstance(embeddings, list) and len(embeddings) > 0:
+                    if isinstance(embeddings[0], torch.Tensor):
+                        embeddings_safe = [emb.cpu().numpy() if hasattr(emb, 'cpu') else emb for emb in embeddings]
+                    else:
+                        embeddings_safe = embeddings
+                else:
+                    embeddings_safe = embeddings
+
+                # Vérification des valeurs invalides
+                if isinstance(embeddings_safe, np.ndarray):
+                    if not np.isfinite(embeddings_safe).all():
+                        print("⚠️ Nettoyage des valeurs invalides dans les embeddings...")
+                        embeddings_safe = np.nan_to_num(embeddings_safe, nan=0.0, posinf=1.0, neginf=-1.0)
+                elif isinstance(embeddings_safe, list):
+                    # Vérifier chaque embedding individuellement
+                    for i, emb in enumerate(embeddings_safe):
+                        if isinstance(emb, np.ndarray) and not np.isfinite(emb).all():
+                            embeddings_safe[i] = np.nan_to_num(emb, nan=0.0, posinf=1.0, neginf=-1.0)
+            else:
+                embeddings_safe = embeddings
+
+            # Ajout avec gestion d'erreur spécifique
+            self.faiss_indexer.add_vectors(embeddings_safe, ids, metadatas)
             self.vectors_added += len(chunks)
-            
+
             print(f"✅ {len(chunks)} chunks ajoutés à l'index FAISS")
             print(f"📊 Vecteurs ajoutés dans cette session: {self.vectors_added}")
-            
+
             # Mise à jour du tracking JSON si un fichier est spécifié
             if file_path:
                 total_images = sum(len(chunk.images) for chunk in chunks)
                 self.tracker.mark_file_indexed(file_path, len(chunks), total_images)
-                
+
         except Exception as e:
             print(f"❌ Erreur lors de l'ajout FAISS: {e}")
+            print("💡 Solutions possibles:")
+            print("   1. Redémarrez Python complètement")
+            print("   2. Supprimez le dossier faiss_index et recommencez")
+            print("   3. Utilisez --no-reranker si le problème persiste")
+            import traceback
+            traceback.print_exc()
             raise
     
     def _generate_embeddings(self, documents: List[str]) -> List[List[float]]:
         """Génère les embeddings pour un batch de textes."""
         # Vérification de la longueur moyenne des documents
         avg_length = sum(len(doc) for doc in documents) / len(documents)
-        print(f"  - Longueur moyenne des documents: {avg_length:.0f} caractères")
+        print(f"  - Longueur moyenne des chunks: {avg_length:.0f} caractères")
         
         if self.is_mps:
             if avg_length > 2000:
                 batch_size = 1  # Ultra-conservateur pour longs documents sur MPS
-                print(f"  - Mode MPS + documents longs: traitement document par document")
+                print(f"  - Mode MPS + chunks longs: traitement chunk par chunk")
             else:
                 batch_size = 2  # Très conservateur pour MPS
-                print(f"  - Mode MPS détecté: utilisation de batches de {batch_size} documents")
+                print(f"  - Mode MPS détecté: utilisation de batches de {batch_size} chunks")
         elif self.is_cuda:
             batch_size = 8 if avg_length < 1000 else 4
-            print(f"  - Mode CUDA détecté: utilisation de batches de {batch_size} documents")
+            print(f"  - Mode CUDA détecté: utilisation de batches de {batch_size} chunks")
         else:
             print(f"❌ Aucun GPU détecté (MPS/CUDA) - traitement impossible")
             raise RuntimeError("GPU requis pour le traitement des embeddings. Utilisez MPS (Mac) ou CUDA.")
@@ -1894,7 +1930,7 @@ class VectorIndexer:
                 batch_num = i // batch_size + 1
                 total_batches = (len(documents) + batch_size - 1) // batch_size
                 
-                print(f"  - Traitement du batch {batch_num}/{total_batches} ({len(batch_docs)} documents)")
+                print(f"  - Traitement du batch {batch_num}/{total_batches} ({len(batch_docs)} chunks)")
                 
                 try:
                     import time
@@ -2077,26 +2113,49 @@ class VectorIndexer:
 
 
 class UniversalDocumentParser:
-    """Parser unifié pour documents HTML et Markdown avec analyse d'images.
-    
-    Cette classe combine les parsers HTML et Markdown pour traiter
+    """Parser unifié pour documents HTML, Markdown et PDF avec analyse d'images.
+
+    Cette classe combine les parsers HTML, Markdown et PDF pour traiter
     automatiquement différents types de documents techniques selon
     leur extension de fichier.
-    
+
     Formats supportés :
     - HTML (.html, .htm) : Documents web, applications Angular
     - Markdown (.md, .markdown) : Documentation technique, README
-    
+    - PDF (.pdf) : Documents PDF avec chunking sémantique intelligent
+
     Attributes:
         base_directory: Répertoire racine pour la résolution des chemins
         html_parser: Instance du parser HTML
         markdown_parser: Instance du parser Markdown
+        pdf_parser: Instance du parser PDF (si PyMuPDF disponible)
     """
-    
+
     def __init__(self, base_directory: str):
         self.base_directory = Path(base_directory)
-        self.html_parser = HTMLDocumentParser(base_directory)
-        self.markdown_parser = MarkdownDocumentParser(base_directory)
+
+        # Créer une seule instance de l'analyseur d'images partagée
+        shared_image_analyzer = OllamaImageAnalyzer()
+
+        self.html_parser = HTMLDocumentParser(base_directory, shared_image_analyzer)
+        self.markdown_parser = MarkdownDocumentParser(base_directory, shared_image_analyzer)
+
+        # Initialisation du parser PDF
+        try:
+            from pdf_parser import PDFDocumentParser
+            self.pdf_parser = PDFDocumentParser(
+                chunk_size=1000,
+                max_chunk_size=1500,
+                min_chunk_size=300,
+                chunk_overlap=100,
+                use_semantic_chunking=True
+            )
+            self.pdf_support = True
+            print("✅ Support PDF activé avec chunking sémantique intelligent")
+        except ImportError as e:
+            self.pdf_parser = None
+            self.pdf_support = False
+            print(f"⚠️ Support PDF désactivé. Installez PyMuPDF: pip install PyMuPDF")
     
     def parse_document(self, file_path: Path, error_collector: ErrorCollector = None) -> List[DocumentChunk]:
         """Parse un document selon son type automatiquement détecté.
@@ -2114,13 +2173,61 @@ class UniversalDocumentParser:
             return self.html_parser.parse_html_file(file_path, error_collector)
         elif file_extension in ['.md', '.markdown']:
             return self.markdown_parser.parse_markdown_file(file_path, error_collector)
+        elif file_extension == '.pdf' and self.pdf_support:
+            return self._parse_pdf_document(file_path, error_collector)
         else:
+            supported_formats = ".html, .htm, .md, .markdown"
+            if self.pdf_support:
+                supported_formats += ", .pdf"
+
             if error_collector:
                 error_collector.add_error(
                     ErrorType.PARSING_ERROR,
                     str(file_path),
                     f"Format de fichier non supporté: {file_extension}",
-                    "Formats supportés: .html, .htm, .md, .markdown"
+                    f"Formats supportés: {supported_formats}"
+                )
+            return []
+
+    def _parse_pdf_document(self, file_path: Path, error_collector: ErrorCollector = None) -> List[DocumentChunk]:
+        """Parse un document PDF et convertit en DocumentChunks.
+
+        Args:
+            file_path: Chemin vers le fichier PDF
+            error_collector: Collecteur d'erreurs optionnel
+
+        Returns:
+            List[DocumentChunk]: Chunks extraits du PDF
+        """
+        try:
+            from pdf_parser import PDFChunk
+
+            # Utilisation du parser PDF
+            pdf_chunks = self.pdf_parser.parse_pdf_file(file_path)
+
+            # Conversion des PDFChunks en DocumentChunks
+            doc_chunks = []
+            for pdf_chunk in pdf_chunks:
+                doc_chunk = DocumentChunk(
+                    content=pdf_chunk.content,
+                    source_file=str(file_path),
+                    chunk_id=pdf_chunk.metadata.get('chunk_id', ''),
+                    title=pdf_chunk.section_title or file_path.stem,
+                    heading=pdf_chunk.subsection_title or pdf_chunk.section_title or f"Page {pdf_chunk.page_numbers[0]+1 if pdf_chunk.page_numbers else 1}",
+                    images=[],  # Les images PDF peuvent être extraites si nécessaire
+                    links=[]    # Les liens PDF peuvent être extraits si nécessaire
+                )
+                doc_chunks.append(doc_chunk)
+
+            return doc_chunks
+
+        except Exception as e:
+            if error_collector:
+                error_collector.add_error(
+                    ErrorType.PARSING_ERROR,
+                    str(file_path),
+                    f"Erreur lors du parsing PDF: {str(e)}",
+                    "Le fichier PDF pourrait être corrompu ou protégé"
                 )
             return []
 
@@ -2183,7 +2290,8 @@ class TechnicalDocIndexer:
             list(self.docs_directory.rglob("*.html")) +
             list(self.docs_directory.rglob("*.htm")) +
             list(self.docs_directory.rglob("*.md")) +
-            list(self.docs_directory.rglob("*.markdown"))
+            list(self.docs_directory.rglob("*.markdown")) +
+            list(self.docs_directory.rglob("*.pdf"))
         )
         
         if not doc_files:
@@ -2193,12 +2301,15 @@ class TechnicalDocIndexer:
         # Statistiques par type de fichier
         html_count = len([f for f in doc_files if f.suffix.lower() in ['.html', '.htm']])
         md_count = len([f for f in doc_files if f.suffix.lower() in ['.md', '.markdown']])
+        pdf_count = len([f for f in doc_files if f.suffix.lower() == '.pdf'])
         
-        print(f"📁 {len(doc_files)} fichiers trouvés :")
+        print(f"📁 {len(doc_files)} fichier{'s' if len(doc_files) > 1 else ''} trouvé{'s' if len(doc_files) > 1 else ''} :")
         if html_count > 0:
-            print(f"   • HTML: {html_count} fichiers")
+            print(f"   • HTML: {html_count} fichier{'s' if html_count > 1 else ''}")
         if md_count > 0:
-            print(f"   • Markdown: {md_count} fichiers")
+            print(f"   • Markdown: {md_count} fichier{'s' if md_count > 1 else ''}")
+        if pdf_count > 0:
+            print(f"   • PDF: {pdf_count} fichier{'s' if pdf_count > 1 else ''}")
         
         # Collecteur d'erreurs avec affichage immédiat
         error_collector = ErrorCollector(show_immediate=True)
@@ -2207,7 +2318,8 @@ class TechnicalDocIndexer:
         total_images_analyzed = 0
         successful_files = 0
         
-        for doc_file in tqdm(doc_files, desc="Indexation des documents"):
+        desc = f"Indexation {'du document' if len(doc_files) == 1 else 'des documents'}"
+        for doc_file in tqdm(doc_files, desc=desc):
             file_status = "✅"
             try:
                 print(f"\n📄 Traitement: {doc_file.name} ({doc_file.suffix})")

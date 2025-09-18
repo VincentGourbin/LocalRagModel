@@ -1138,14 +1138,173 @@ Réponds à cette question en te basant sur le contexte fourni."""
         yield history
 
 
-def _create_rag_system():
+class LocalFAISSRAGChatbot(GenericRAGChatbot):
+    """Version du chatbot RAG qui utilise l'index FAISS local au lieu de HuggingFace Hub."""
+
+    def __init__(self, faiss_path="./faiss_index", **kwargs):
+        self.faiss_path = Path(faiss_path)
+
+        # Vérifier que l'index FAISS existe
+        if not self.faiss_path.exists():
+            raise FileNotFoundError(f"Index FAISS non trouvé: {self.faiss_path}")
+
+        # Sauvegarder le chemin pour override
+        self._faiss_path_override = faiss_path
+
+        # Configuration factice pour éviter le téléchargement HF
+        self.config = type('Config', (), {
+            'repo_id': f'local:{faiss_path}',
+            'total_vectors': 0,  # Sera mis à jour après chargement
+            'vector_dimension': 2560,
+            'embedding_model': 'Qwen/Qwen3-Embedding-4B'
+        })()
+
+        # Paramètres pour éviter l'init parent complet
+        self.generation_model_name = kwargs.get('generation_model', "Qwen/Qwen3-4B-Instruct-2507")
+        self.initial_k = kwargs.get('initial_k', 15)
+        self.final_k = kwargs.get('final_k', 3)
+        self.use_flash_attention = False  # Toujours désactivé
+        self.use_reranker = kwargs.get('use_reranker', True)
+
+        # Détection de l'environnement (copié de parent)
+        self.is_zerogpu = ZEROGPU_AVAILABLE and os.getenv("SPACE_ID") is not None
+        self.is_mps = torch.backends.mps.is_available() and not self.is_zerogpu
+        self.is_cuda = torch.cuda.is_available()
+
+        # Configuration du device
+        if self.is_mps:
+            self.device = torch.device("mps")
+        elif self.is_cuda:
+            self.device = torch.device("cuda")
+        else:
+            self.device = torch.device("cpu")
+
+        # Chargement direct de l'index FAISS local
+        self._load_local_faiss_index()
+
+        # Chargement des modèles (comme dans le parent mais sans HF downloads)
+        self._load_embedding_model()
+        self._load_reranker()
+        self._load_generation_model()
+
+        print(f"✅ LocalFAISSRAGChatbot initialisé avec {self.config.total_vectors:,} vecteurs")
+
+    def _load_local_faiss_index(self):
+        """Charge l'index FAISS local directement."""
+        try:
+            from faiss_indexer import FAISSIndexer
+            import faiss
+            import numpy as np
+
+            print(f"📁 Chargement de l'index FAISS local: {self.faiss_path}")
+
+            # Initialisation de l'indexer FAISS
+            self.faiss_indexer = FAISSIndexer(str(self.faiss_path), dimension=2560)
+
+            # Mise à jour du nombre de vecteurs
+            self.config.total_vectors = self.faiss_indexer.count()
+
+            # Créer aussi l'attribut faiss_index pour compatibilité avec la classe parent
+            self.faiss_index = self.faiss_indexer.index
+
+            # Créer des structures compatibles avec la classe parent
+            self.ordered_ids = []
+            self.id_to_idx = {}
+            self.content_metadata = {}
+
+            # Récupérer les métadonnées depuis l'indexer
+            if hasattr(self.faiss_indexer, 'metadata') and self.faiss_indexer.metadata:
+                for chunk_id, metadata in self.faiss_indexer.metadata.items():
+                    idx = len(self.ordered_ids)
+                    self.ordered_ids.append(chunk_id)
+                    self.id_to_idx[chunk_id] = idx
+                    self.content_metadata[chunk_id] = metadata
+
+            print(f"✅ Index FAISS local chargé: {self.config.total_vectors:,} vecteurs")
+
+        except Exception as e:
+            print(f"❌ Erreur lors du chargement de l'index FAISS local: {e}")
+            raise
+
+    def _load_step03_config(self):
+        """Override pour éviter le chargement de la configuration HF."""
+        print("📁 Mode FAISS local - configuration par défaut utilisée")
+
+    def _load_hf_embeddings(self):
+        """Override pour éviter le téléchargement depuis HuggingFace."""
+        print("📁 Mode FAISS local - pas de téléchargement HF nécessaire")
+
+    def _semantic_search(self, query_embedding, initial_k=15):
+        """Recherche sémantique en utilisant l'index FAISS local - compatible avec classe parent."""
+        try:
+            import numpy as np
+
+            print(f"🔍 Recherche sémantique sur {self.config.total_vectors:,} vecteurs (local FAISS)")
+
+            # Conversion du query_embedding en numpy array
+            if isinstance(query_embedding, list):
+                query_vector = np.array([query_embedding], dtype=np.float32)
+            else:
+                query_vector = query_embedding.reshape(1, -1).astype(np.float32)
+
+            # Normaliser la requête pour IndexFlatIP (consistency avec les embeddings)
+            print("  📐 Normalisation de la requête...")
+            norm = np.linalg.norm(query_vector)
+            if norm > 0:
+                query_vector = query_vector / norm
+
+            distances, indices = self.faiss_index.search(query_vector, initial_k)
+
+            if len(indices[0]) == 0:
+                print("❌ Aucun document trouvé")
+                return []
+
+            print(f"📋 {len(indices[0])} candidats récupérés")
+
+            # Conversion en format intermédiaire (même logique que la classe parent)
+            initial_results = []
+            for i, (distance, idx) in enumerate(zip(distances[0], indices[0])):
+                if idx < len(self.ordered_ids):
+                    doc_id = self.ordered_ids[idx]
+                    doc_metadata = self.content_metadata.get(doc_id, {})
+
+                    # Interprétation uniforme pour IndexFlatIP
+                    # IndexFlatIP retourne inner product normalisé = cosine similarity
+                    embedding_score = float(distance)  # Inner product normalisé = cosine similarity
+                    embedding_distance = 1.0 - embedding_score  # Conversion en distance pour compatibilité
+
+                    doc = {
+                        'content': doc_metadata.get('chunk_content', 'Contenu non disponible'),
+                        'metadata': doc_metadata,
+                        'embedding_score': embedding_score,
+                        'embedding_distance': embedding_distance,
+                        'rank': i + 1,
+                        'source': 'local_faiss'
+                    }
+                    initial_results.append(doc)
+
+            return initial_results
+
+        except Exception as e:
+            print(f"❌ Erreur lors de la recherche sémantique: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
+
+
+def _create_rag_system(use_local_faiss=False, faiss_path="./faiss_index"):
     """Créé et configure le système RAG avec paramètres optimaux"""
-    
+
     # Détection automatique d'environnement
     is_zerogpu = ZEROGPU_AVAILABLE and os.getenv("SPACE_ID") is not None
     is_mac = torch.backends.mps.is_available() and not is_zerogpu
     is_cuda = torch.cuda.is_available()
-    
+
+    if use_local_faiss:
+        print("📁 Mode FAISS local activé")
+    else:
+        print("☁️ Mode HuggingFace Hub activé")
+
     if is_zerogpu:
         print("🚀 ZeroGPU détecté - optimisations cloud appliquées")
     elif is_mac:
@@ -1180,7 +1339,13 @@ def _create_rag_system():
         }
     
     print("🚀 Initialisation du chatbot RAG générique...")
-    return GenericRAGChatbot(**default_config)
+
+    if use_local_faiss:
+        print(f"📁 Utilisation de l'index FAISS local: {faiss_path}")
+        return LocalFAISSRAGChatbot(faiss_path=faiss_path, **default_config)
+    else:
+        print("☁️ Utilisation des embeddings HuggingFace Hub")
+        return GenericRAGChatbot(**default_config)
 
 
 def _clear_message():
@@ -1412,8 +1577,43 @@ def create_gradio_interface():
 
 def main():
     """Point d'entrée principal."""
-    print("🚀 LocalRAG Step 03 - Interface de chat générique")
+    import argparse
+    import secrets
+    import string
+
+    # Configuration des arguments
+    parser = argparse.ArgumentParser(description="LocalRAG Step 03 - Interface de chat avec options avancées")
+    parser.add_argument("--local-faiss", action="store_true",
+                       help="Utilise l'index FAISS local au lieu des embeddings HuggingFace")
+    parser.add_argument("--faiss-path", default="./faiss_index",
+                       help="Chemin vers l'index FAISS local (défaut: ./faiss_index)")
+    parser.add_argument("--share", action="store_true",
+                       help="Lance Gradio en mode public avec authentification admin")
+    parser.add_argument("--admin-user", default="admin",
+                       help="Nom d'utilisateur admin (défaut: admin)")
+
+    args = parser.parse_args()
+
+    print("🚀 LocalRAG Step 03 - Interface de chat avancée")
     print("=" * 50)
+
+    # Mode d'opération
+    if args.local_faiss:
+        print(f"📁 Mode FAISS local: {args.faiss_path}")
+    else:
+        print("☁️ Mode HuggingFace Hub (téléchargement des embeddings)")
+
+    # Génération du mot de passe admin si mode share
+    admin_password = None
+    if args.share:
+        # Génération d'un mot de passe sécurisé de 16 caractères
+        alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
+        admin_password = ''.join(secrets.choice(alphabet) for _ in range(16))
+        print(f"🔐 Mode public activé")
+        print(f"👤 Admin: {args.admin_user}")
+        print(f"🔑 Password: {admin_password}")
+        print("⚠️ IMPORTANT: Notez ce mot de passe, il ne sera plus affiché !")
+        print("=" * 50)
     
     # Vérification des dépendances
     if not _check_dependencies():
@@ -1422,7 +1622,7 @@ def main():
     # Initialisation du système RAG
     global rag_system
     try:
-        rag_system = _create_rag_system()
+        rag_system = _create_rag_system(use_local_faiss=args.local_faiss, faiss_path=args.faiss_path)
     except Exception as e:
         print(f"❌ Erreur d'initialisation: {e}")
         return 1
@@ -1574,29 +1774,41 @@ def main():
         print("🌐 Lancement de l'interface Gradio...")
         
         # Configuration HTTPS pour Claude Desktop
+        # Configuration du lancement
+        launch_config = {
+            'mcp_server': True,  # Toujours activer MCP
+            'show_error': True
+        }
+
+        # Mode public avec authentification
+        if args.share:
+            launch_config.update({
+                'share': True,
+                'auth': (args.admin_user, admin_password),
+                'inbrowser': False  # Pas d'ouverture auto en mode public
+            })
+            print("🌐 Interface publique avec authentification activée")
+            print("🔗 Serveur MCP : /gradio_api/mcp/sse")
+        else:
+            launch_config['inbrowser'] = True
+
+        # Configuration HTTPS optionnelle
         ssl_keyfile = os.getenv("SSL_KEYFILE")
         ssl_certfile = os.getenv("SSL_CERTFILE")
-        
+
         if ssl_keyfile and ssl_certfile:
             print("🔒 Mode HTTPS activé")
-            print("🔗 Serveur MCP : /gradio_api/mcp/sse")
-            
-            demo.launch(
-                mcp_server=True,  # Toujours activer MCP
-                inbrowser=True,
-                show_error=True,
-                ssl_keyfile=ssl_keyfile,
-                ssl_certfile=ssl_certfile
-            )
-        else:
-            print("🔗 Serveur MCP : /gradio_api/mcp/sse")
+            launch_config.update({
+                'ssl_keyfile': ssl_keyfile,
+                'ssl_certfile': ssl_certfile
+            })
+        elif not args.share:
             print("💡 Pour HTTPS : python step03_ssl_generator_optional.py")
-            
-            demo.launch(
-                mcp_server=True,  # Toujours activer MCP
-                inbrowser=True,
-                show_error=True
-            )
+
+        if not args.share:
+            print("🔗 Serveur MCP : /gradio_api/mcp/sse")
+
+        demo.launch(**launch_config)
         
         print("📋 Outil MCP exposé : ask_rag_question")
 

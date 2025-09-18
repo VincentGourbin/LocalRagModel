@@ -88,49 +88,76 @@ class FAISSIndexer:
         
         print(f"🆕 Nouvel index FAISS créé (HNSW)")
     
-    def add_vectors(self, embeddings: List[List[float]], ids: List[str], metadatas: List[Dict]):
-        """Ajoute des vecteurs à l'index FAISS.
-        
-        Cette méthode est beaucoup plus rapide que ChromaDB.add()
-        
+    def add_vectors(self, embeddings: List[List[float]], ids: List[str], metadatas: List[Dict], batch_size: int = 50):
+        """Ajoute des vecteurs à l'index FAISS par batches pour éviter les segfaults.
+
+        Cette méthode est beaucoup plus rapide que ChromaDB.add() et gère les gros volumes.
+
         Args:
             embeddings: Liste des vecteurs d'embedding
             ids: Liste des identifiants uniques
             metadatas: Liste des métadonnées associées
+            batch_size: Taille des batches pour l'ajout (50 par défaut pour éviter les crashes)
         """
         if not embeddings or not ids:
             return
-            
-        print(f"📥 Ajout de {len(embeddings)} vecteurs à FAISS...")
+
+        total_vectors = len(embeddings)
+        print(f"📥 Ajout de {total_vectors} vecteurs à FAISS par batches de {batch_size}...")
         start_time = time.time()
-        
-        # Conversion en numpy array pour FAISS
-        vectors = np.array(embeddings, dtype=np.float32)
-        
-        if vectors.shape[1] != self.dimension:
-            raise ValueError(f"Dimension incorrecte: {vectors.shape[1]} != {self.dimension}")
-        
-        # Obtenir les indices de départ
-        start_idx = self.index.ntotal
-        
-        # Ajout à l'index FAISS (très rapide !)
-        self.index.add(vectors)
-        
-        # Mise à jour des mappings et métadonnées
-        for i, (id_, metadata) in enumerate(zip(ids, metadatas)):
-            idx = start_idx + i
-            self.id_to_idx[id_] = idx
-            self.idx_to_id[idx] = id_
-            self.metadata[id_] = metadata
-        
-        self.vectors_added += len(embeddings)
+
+        # Traitement par batches pour éviter les segfaults avec de gros volumes
+        for batch_start in range(0, total_vectors, batch_size):
+            batch_end = min(batch_start + batch_size, total_vectors)
+            batch_num = (batch_start // batch_size) + 1
+            total_batches = (total_vectors + batch_size - 1) // batch_size
+
+            print(f"  🔄 Batch {batch_num}/{total_batches}: ajout de {batch_end - batch_start} vecteurs...")
+
+            # Extraction du batch
+            batch_embeddings = embeddings[batch_start:batch_end]
+            batch_ids = ids[batch_start:batch_end]
+            batch_metadatas = metadatas[batch_start:batch_end]
+
+            # Conversion en numpy array pour FAISS
+            vectors = np.array(batch_embeddings, dtype=np.float32)
+
+            if vectors.shape[1] != self.dimension:
+                raise ValueError(f"Dimension incorrecte: {vectors.shape[1]} != {self.dimension}")
+
+            # Obtenir les indices de départ pour ce batch
+            start_idx = self.index.ntotal
+
+            try:
+                # Ajout à l'index FAISS batch par batch
+                self.index.add(vectors)
+
+                # Mise à jour des mappings et métadonnées pour ce batch
+                for i, (id_, metadata) in enumerate(zip(batch_ids, batch_metadatas)):
+                    idx = start_idx + i
+                    self.id_to_idx[id_] = idx
+                    self.idx_to_id[idx] = id_
+                    self.metadata[id_] = metadata
+
+                print(f"    ✅ Batch {batch_num} ajouté ({batch_end - batch_start} vecteurs)")
+
+            except Exception as e:
+                print(f"    ❌ Erreur batch {batch_num}: {e}")
+                # Continuer avec les autres batches plutôt que de tout arrêter
+                continue
+
+        self.vectors_added += total_vectors
         duration = time.time() - start_time
-        
+
         print(f"✅ Ajout FAISS terminé en {duration:.2f}s")
         print(f"📊 Total vecteurs: {self.index.ntotal}")
-        
-        # Sauvegarde immédiate
-        self._save_index()
+
+        # Sauvegarde immédiate après tous les batches
+        try:
+            self._save_index()
+        except Exception as e:
+            print(f"⚠️ Erreur lors de la sauvegarde: {e}")
+            print("💡 L'index en mémoire est intact, mais la sauvegarde a échoué")
     
     def search(self, query_embedding: List[float], k: int = 10) -> List[Dict]:
         """Recherche les k vecteurs les plus similaires.

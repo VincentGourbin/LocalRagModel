@@ -41,11 +41,30 @@ Système RAG (Retrieval-Augmented Generation) utilisant les modèles Qwen3 de de
 - **Génération**: Qwen3-4B-Instruct-2507 avec streaming
 - **Optimisation ZeroGPU**: Support natif avec décorateurs @spaces.GPU
 
+### 📄 **Support Multi-Formats avec PDF Intelligent**
+- **HTML/Markdown**: Parsing structurel avec préservation hiérarchique
+- **PDF avancé**: Chunking sémantique intelligent pour documents longs (50+ pages)
+- **Détection automatique**: Structure, TOC et titres des PDFs
+- **Overlap contextuel**: Préservation du contexte entre chunks (100-200 mots)
+- **Batch processing**: Indexation par lots pour éviter les crashes mémoire
+
 ### 🔍 **Recherche Sémantique Avancée**
 - **Pipeline 2 étapes**: Recherche vectorielle + reranking
 - **Index FAISS**: Recherche haute performance sur de gros volumes
 - **Scores détaillés**: Embedding + reranking pour chaque document
 - **Sélection intelligente**: Top-K adaptatif selon pertinence
+
+### 🚀 **Modes de Déploiement Flexibles**
+- **Mode HuggingFace Hub**: Téléchargement automatique des embeddings
+- **Mode FAISS Local**: Utilisation directe de l'index local (5x plus rapide)
+- **Mode Offline**: Fonctionnement complet sans connexion internet
+- **Mode Public Sécurisé**: Partage via URL avec authentification admin
+
+### 🔐 **Sécurité et Authentification**
+- **Mot de passe aléatoire**: 16 caractères cryptographiquement sécurisés
+- **Génération automatique**: Combinaison lettres + chiffres + symboles
+- **Session unique**: Nouveau mot de passe à chaque démarrage
+- **Contrôle d'accès**: Interface publique avec protection admin
 
 ### 💬 **Génération Contextuelle**
 - **Streaming**: Réponse progressive token par token
@@ -62,9 +81,9 @@ Système RAG (Retrieval-Augmented Generation) utilisant les modèles Qwen3 de de
 ## 🛠️ Architecture & Étapes
 
 ### Pipeline de Traitement
-1. **Step01** : Indexation des documents (FAISS + métadonnées)
-2. **Step02** : Upload embeddings vers HuggingFace Hub
-3. **Step03** : Interface de chat RAG (compatible MPS/CUDA/ZeroGPU)
+1. **Step01** : Indexation universelle (HTML/Markdown/PDF → FAISS + métadonnées)
+2. **Step02** : Upload embeddings vers HuggingFace Hub (optionnel)
+3. **Step03** : Interface de chat RAG (mode local ou cloud)
 4. **Step04** : Déploiement automatique sur HuggingFace Spaces
 
 ### Recherche en 2 Étapes
@@ -74,24 +93,62 @@ Système RAG (Retrieval-Augmented Generation) utilisant les modèles Qwen3 de de
 
 ## 🚀 Utilisation
 
-### Interface Web
-1. **Posez votre question** dans le chat
-2. **Observez la recherche** en 2 étapes (vectorielle → reranking)
-3. **Lisez la réponse** générée en streaming
-4. **Consultez les sources** avec scores de pertinence
-
-### Installation Locale
+### Installation & Démarrage Rapide
 ```bash
 # Cloner le projet
 git clone [repo-url]
 cd LocalRagModel
 
-# Installer les dépendances
+# Installer les dépendances (inclut PyMuPDF pour PDF)
 pip install -r requirements.txt
 
-# Lancer l'interface
+# Indexer vos documents (HTML/Markdown/PDF)
+python step01_indexer.py docs/ --no-flash-attention
+
+# Lancer en mode local rapide (recommandé)
+python step03_chatbot.py --local-faiss
+
+# Ou lancer en mode public sécurisé
+python step03_chatbot.py --local-faiss --share
+```
+
+### Modes de Lancement
+
+#### Mode Local (Défaut HuggingFace)
+```bash
 python step03_chatbot.py
 ```
+
+#### Mode Local FAISS ⭐ **Recommandé**
+```bash
+python step03_chatbot.py --local-faiss
+```
+- 🚀 **5x plus rapide** au démarrage
+- 🔌 **Fonctionne offline**
+- 📁 **Utilise directement** vos données indexées
+
+#### Mode Public Sécurisé
+```bash
+python step03_chatbot.py --local-faiss --share
+```
+- 🌐 **Interface publique** accessible via URL Gradio
+- 🔐 **Authentification automatique** (admin / mot_de_passe_16_chars)
+- 🔑 **Nouveau mot de passe** à chaque démarrage
+
+#### Options Avancées
+```bash
+# Chemin FAISS personnalisé
+python step03_chatbot.py --local-faiss --faiss-path ./mon_index
+
+# Utilisateur admin personnalisé
+python step03_chatbot.py --share --admin-user myuser
+```
+
+### Interface Web
+1. **Posez votre question** dans le chat
+2. **Observez la recherche** en 2 étapes (vectorielle → reranking)
+3. **Lisez la réponse** générée en streaming
+4. **Consultez les sources** avec scores de pertinence
 
 ### Configuration des Modèles
 - **MPS (Mac)** : Support natif, Flash Attention désactivé
@@ -112,11 +169,13 @@ result = mcp_client.call_tool(
 
 ## 🎯 Cas d'Usage Parfaits
 
-- **Documentation technique**: Recherche dans APIs, guides, tutoriels
+- **Documentation technique**: Recherche dans APIs, guides, tutoriels (HTML/Markdown)
+- **Manuels PDF**: Documents techniques, rapports, livres (PDF chunking intelligent)
 - **Support client**: Réponses basées sur une base de connaissances
-- **Recherche académique**: Analyse de corpus documentaires
+- **Recherche académique**: Analyse de corpus documentaires longs
 - **Assistance développeur**: Aide contextuelle sur frameworks/librairies
 - **Formation**: Système de questions-réponses intelligent
+- **Démonstrations**: Partage public sécurisé d'assistants personnalisés
 
 ## 📊 Performance
 
@@ -142,14 +201,19 @@ Ce Space utilise des embeddings pré-calculés depuis le dataset :
 - [x] Pipeline RAG complet (recherche + reranking + génération)
 - [x] Interface Gradio avec streaming
 - [x] Support multi-plateforme (MPS/CUDA/ZeroGPU)
+- [x] **Support PDF avec chunking sémantique intelligent**
+- [x] **Mode FAISS local (5x plus rapide, offline)**
+- [x] **Mode public sécurisé avec authentification**
+- [x] **Batch processing FAISS (anti-crash)**
 - [x] Intégration MCP native
 - [x] Déploiement automatique HuggingFace Spaces
 
 ### 🔄 Améliorations Futures
-- [ ] **Optimisation performances** (caching, batch processing)
+- [ ] **Extraction d'images PDF** : Analyse des diagrammes et schémas
+- [ ] **OCR pour PDFs scannés** : Support des documents numérisés
 - [ ] **Upload documents sources** vers HuggingFace Hub
 - [ ] **Step00** : Téléchargement automatique de documentation technique depuis internet
-- [ ] Support formats additionnels (PDF, DOCX, HTML)
+- [ ] Support formats additionnels (DOCX, PowerPoint)
 - [ ] Interface d'administration pour gestion des documents
 
 ---
