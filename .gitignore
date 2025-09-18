@@ -12,6 +12,10 @@ step03_config.json
 # SSL certificates (auto-generated)
 ssl_certs/
 
+# Répertoires avec fichiers sensibles (certificats, PDFs privés)
+.gradio/
+inputarchi/
+
 # Modèles et cache
 __pycache__/
 *.pyc
