@@ -16,6 +16,9 @@ ssl_certs/
 .gradio/
 inputarchi/
 
+# Données téléchargées par step01
+data/
+
 # Modèles et cache
 __pycache__/
 *.pyc

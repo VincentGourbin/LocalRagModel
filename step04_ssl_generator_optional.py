@@ -114,14 +114,14 @@ IP.2 = ::1
     print("\n🚀 Pour utiliser HTTPS avec LocalRAG:")
     print(f"export SSL_KEYFILE='{abs_key}'")
     print(f"export SSL_CERTFILE='{abs_cert}'")
-    print("python step03_chatbot.py")
+    print("python step04_chatbot.py")
     
     print("\n🔧 Configuration Claude Desktop (claude_desktop_config.json):")
     print(f"""{{
   "mcpServers": {{
     "localrag": {{
       "command": "python",
-      "args": ["{Path.cwd() / 'step03_chatbot.py'}"],
+      "args": ["{Path.cwd() / 'step04_chatbot.py'}"],
       "env": {{
         "SSL_KEYFILE": "{abs_key}",
         "SSL_CERTFILE": "{abs_cert}",

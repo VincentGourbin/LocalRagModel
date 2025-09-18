@@ -97,7 +97,7 @@ def _check_dependencies():
 class Step03Config:
     """Gestionnaire de configuration Step 03 basé sur la sortie Step 02."""
     
-    def __init__(self, config_file: str = "step03_config.json"):
+    def __init__(self, config_file: str = "step04_config.json"):
         self.config_file = Path(config_file)
         self.config = self.load_config()
     
@@ -459,13 +459,13 @@ class GenericRAGChatbot:
             self.use_flash_attention = False
         
         # Chargement des composants
-        self._load_step03_config()
+        self._load_step04_config()
         self._load_embeddings_from_hf()
         self._load_embedding_model()
         self._load_reranker()
         self._load_generation_model()
 
-    def _load_step03_config(self):
+    def _load_step04_config(self):
         """Charge la configuration Step 03"""
         try:
             self.config = Step03Config()
@@ -1226,7 +1226,7 @@ class LocalFAISSRAGChatbot(GenericRAGChatbot):
             print(f"❌ Erreur lors du chargement de l'index FAISS local: {e}")
             raise
 
-    def _load_step03_config(self):
+    def _load_step04_config(self):
         """Override pour éviter le chargement de la configuration HF."""
         print("📁 Mode FAISS local - configuration par défaut utilisée")
 
@@ -1803,7 +1803,7 @@ def main():
                 'ssl_certfile': ssl_certfile
             })
         elif not args.share:
-            print("💡 Pour HTTPS : python step03_ssl_generator_optional.py")
+            print("💡 Pour HTTPS : python step04_ssl_generator_optional.py")
 
         if not args.share:
             print("🔗 Serveur MCP : /gradio_api/mcp/sse")

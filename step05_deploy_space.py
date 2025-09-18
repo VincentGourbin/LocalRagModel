@@ -74,8 +74,8 @@ def get_space_info():
     if not space_desc:
         space_desc = default_desc
     
-    # Repository d'embeddings depuis step03_config.json
-    config_file = Path("step03_config.json")
+    # Repository d'embeddings depuis step04_config.json
+    config_file = Path("step04_config.json")
     repo_id = None
     if config_file.exists():
         try:
@@ -85,7 +85,7 @@ def get_space_info():
                 if repo_id:
                     print(f"📦 Repository embeddings détecté: {repo_id}")
         except Exception as e:
-            print(f"⚠️ Erreur lecture step03_config.json: {e}")
+            print(f"⚠️ Erreur lecture step04_config.json: {e}")
     
     if not repo_id:
         repo_id = input("Repository HF des embeddings (ex: username/embeddings): ").strip()
@@ -116,7 +116,7 @@ colorFrom: blue
 colorTo: green
 sdk: gradio
 sdk_version: 5.43.1
-app_file: step03_chatbot.py
+app_file: step04_chatbot.py
 pinned: false
 license: mit
 hardware: zerogpu
@@ -262,8 +262,8 @@ def validate_files():
     required_files = [
         "requirements.txt", 
         "README.md",
-        "step03_chatbot.py",
-        "step03_config.json"
+        "step04_chatbot.py",
+        "step04_config.json"
     ]
     
     missing_files = []
@@ -273,15 +273,15 @@ def validate_files():
     
     if missing_files:
         print(f"❌ Fichiers manquants: {', '.join(missing_files)}")
-        if "step03_config.json" in missing_files:
+        if "step04_config.json" in missing_files:
             print("💡 Lancez d'abord step02 pour générer la configuration")
         sys.exit(1)
     
-    # Vérifier les décorateurs ZeroGPU dans step03_chatbot.py
-    with open("step03_chatbot.py", "r") as f:
+    # Vérifier les décorateurs ZeroGPU dans step04_chatbot.py
+    with open("step04_chatbot.py", "r") as f:
         content = f.read()
         if "@spaces.GPU" not in content:
-            print("⚠️ Attention: Pas de décorateurs @spaces.GPU trouvés dans step03_chatbot.py")
+            print("⚠️ Attention: Pas de décorateurs @spaces.GPU trouvés dans step04_chatbot.py")
             print("Le Space fonctionnera mais sans optimisations GPU")
         else:
             print("✅ Décorateurs ZeroGPU détectés")
@@ -342,9 +342,9 @@ def deploy_files(space_info, token):
     files_to_upload = [
         "requirements.txt",
         "README.md", 
-        "step03_chatbot.py",
-        "step03_config.json",
-        "step03_utils.py"
+        "step04_chatbot.py",
+        "step04_config.json",
+        "step04_utils.py"
     ]
     
     try:
@@ -421,14 +421,14 @@ def main():
         }
         
         # Charger repo_id depuis config
-        config_file = Path("step03_config.json")
+        config_file = Path("step04_config.json")
         if config_file.exists():
             with open(config_file, 'r') as f:
                 config = json.load(f)
                 space_info['repo_id'] = config.get('repo_id')
         
         if not space_info['repo_id']:
-            print("❌ step03_config.json requis pour le repository embeddings")
+            print("❌ step04_config.json requis pour le repository embeddings")
             sys.exit(1)
     else:
         space_info = get_space_info()

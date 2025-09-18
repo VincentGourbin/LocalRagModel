@@ -300,7 +300,7 @@ class EmbeddingUploader:
                 print(f"  💾 Taille SafeTensors: {safetensors_file.stat().st_size / 1024 / 1024:.1f} MB")
                 
                 # Sauvegarder la configuration pour Step 03
-                self._save_step03_config(repo_name, dataset_name, metadata_dict)
+                self._save_step04_config(repo_name, dataset_name, metadata_dict)
                 
                 return repo_url
                 
@@ -314,13 +314,13 @@ class EmbeddingUploader:
             raise
     
     
-    def _save_step03_config(self, repo_name: str, dataset_name: str, metadata_dict: Dict):
+    def _save_step04_config(self, repo_name: str, dataset_name: str, metadata_dict: Dict):
         """Sauvegarde la configuration pour Step 03."""
-        config_file = Path("step03_config.json")
+        config_file = Path("step04_config.json")
         
         # Configuration complète pour Step 03
-        step03_config = {
-            "step02_completed": True,
+        step04_config = {
+            "step03_completed": True,
             "completion_timestamp": datetime.now().isoformat(),
             "huggingface": {
                 "repo_id": repo_name,
@@ -348,7 +348,7 @@ class EmbeddingUploader:
         # Sauvegarder avec formatage lisible
         try:
             with open(config_file, 'w', encoding='utf-8') as f:
-                json.dump(step03_config, f, indent=2, ensure_ascii=False)
+                json.dump(step04_config, f, indent=2, ensure_ascii=False)
             
             print(f"\n💾 Configuration Step 03 sauvegardée: {config_file}")
             print(f"  📦 Repository HF: {repo_name}")

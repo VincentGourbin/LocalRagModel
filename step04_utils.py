@@ -10,7 +10,7 @@ from typing import Dict, Optional
 class Step03Config:
     """Gestionnaire de configuration Step 03 basé sur la sortie Step 02."""
     
-    def __init__(self, config_file: str = "step03_config.json"):
+    def __init__(self, config_file: str = "step04_config.json"):
         self.config_file = Path(config_file)
         self.config = self.load_config()
     
@@ -131,7 +131,7 @@ print(f"✅ Embeddings chargés: {{embeddings.shape}}")
         }
 
 
-def load_step03_config(config_file: str = "step03_config.json") -> Step03Config:
+def load_step04_config(config_file: str = "step04_config.json") -> Step03Config:
     """
     Fonction utilitaire pour charger la configuration Step 03.
     
@@ -148,7 +148,7 @@ def load_step03_config(config_file: str = "step03_config.json") -> Step03Config:
     return Step03Config(config_file)
 
 
-def check_step03_ready() -> bool:
+def check_step04_ready() -> bool:
     """
     Vérifie si Step 03 peut être lancé (configuration Step 02 disponible).
     
@@ -156,7 +156,7 @@ def check_step03_ready() -> bool:
         True si prêt, False sinon
     """
     try:
-        config = load_step03_config()
+        config = load_step04_config()
         return config.config.get("step02_completed", False)
     except (FileNotFoundError, ValueError):
         return False
@@ -168,8 +168,8 @@ if __name__ == "__main__":
         print("🧪 Test de configuration Step 03")
         print("=" * 40)
         
-        if check_step03_ready():
-            config = load_step03_config()
+        if check_step04_ready():
+            config = load_step04_config()
             config.print_summary()
             
             print("\n📖 Instructions de téléchargement:")

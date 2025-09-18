@@ -1,0 +1,25 @@
+{
+  "step03_completed": true,
+  "completion_timestamp": "2025-08-22T14:04:40.765170",
+  "huggingface": {
+    "repo_id": "VincentGOURBIN/swift-mlx-Qwen3-Embedding-4B",
+    "dataset_name": "embeddings",
+    "repo_type": "dataset",
+    "files": {
+      "embeddings": "embeddings.safetensors",
+      "metadata": "embeddings_metadata.json",
+      "readme": "README.md"
+    }
+  },
+  "embeddings_info": {
+    "total_vectors": 7511,
+    "vector_dimension": 2560,
+    "embedding_model": "Qwen/Qwen3-Embedding-4B",
+    "faiss_index_type": "HNSW",
+    "format_version": "1.0"
+  },
+  "usage_examples": {
+    "download_command": "hf_hub_download(repo_id=\"VincentGOURBIN/swift-mlx-Qwen3-Embedding-4B\", filename=\"embeddings.safetensors\")",
+    "load_command": "tensors = load_file(\"embeddings.safetensors\"); embeddings = tensors[\"embeddings\"]"
+  }
+}

@@ -5,7 +5,7 @@ colorFrom: blue
 colorTo: green
 sdk: gradio
 sdk_version: 5.43.1
-app_file: step03_chatbot.py
+app_file: step04_chatbot.py
 pinned: false
 license: mit
 hardware: zerogpu
@@ -81,15 +81,49 @@ Système RAG (Retrieval-Augmented Generation) utilisant les modèles Qwen3 de de
 ## 🛠️ Architecture & Étapes
 
 ### Pipeline de Traitement
-1. **Step01** : Indexation universelle (HTML/Markdown/PDF → FAISS + métadonnées)
-2. **Step02** : Upload embeddings vers HuggingFace Hub (optionnel)
-3. **Step03** : Interface de chat RAG (mode local ou cloud)
-4. **Step04** : Déploiement automatique sur HuggingFace Spaces
+1. **Step01** : Téléchargement automatique de documentation web (optionnel)
+2. **Step02** : Indexation universelle (HTML/Markdown/PDF → FAISS + métadonnées)
+3. **Step03** : Upload embeddings vers HuggingFace Hub (optionnel)
+4. **Step04** : Interface de chat RAG (mode local ou cloud)
 
 ### Recherche en 2 Étapes
 1. **Recherche vectorielle** : FAISS IndexFlatIP (cosine similarity)
 2. **Reranking** : Qwen3-Reranker-4B pour affiner la pertinence
 3. **Génération** : Qwen3-4B-Instruct-2507 avec streaming
+
+## 📥 Step01 - Téléchargeur de Documentation
+
+Le nouveau **step01_downloader.py** permet de télécharger automatiquement de la documentation depuis internet pour alimenter votre système RAG.
+
+### Fonctionnalités
+- **Interface simplifiée** : Utilisation directe avec --start-url
+- **URLs de départ multiples** : Support de plusieurs points d'entrée
+- **Téléchargement intelligent** : Respect des robots.txt et limitations
+- **Formats supportés** : HTML, Markdown, PDF
+- **Filtrage automatique** : Exclusion des fichiers non pertinents
+- **Détection automatique** : Base URL automatiquement détectée
+
+### Utilisation
+```bash
+# Télécharger depuis une URL de départ (stocké dans ./data/docs/)
+python step01_downloader.py --start-url https://pytorch.org/docs/stable/ --output docs
+
+# Télécharger depuis plusieurs URLs de départ (stocké dans ./data/api_docs/)
+python step01_downloader.py --start-url https://site1.com/docs --start-url https://site2.com/api --output api_docs
+
+# Options avancées avec base URL personnalisée (stocké dans ./data/swift_docs/)
+python step01_downloader.py --start-url https://docs.swift.org/swift-book/ --base-url https://docs.swift.org --output swift_docs --workers 5
+
+# Reprendre un téléchargement interrompu
+python step01_downloader.py --start-url https://site.com/docs --output my_docs --resume
+```
+
+### Options disponibles
+- `--start-url` : URL de départ pour le crawling (requis, peut être répété)
+- `--base-url` : URL de base (optionnel, auto-détecté depuis la première start-url)
+- `--output` : Nom du dossier (sera créé dans ./data/, défaut: downloaded_docs)
+- `--workers` : Nombre de workers parallèles (défaut: 3)
+- `--resume` : Reprendre un téléchargement interrompu (flag optionnel)
 
 ## 🚀 Utilisation
 
@@ -99,29 +133,35 @@ Système RAG (Retrieval-Augmented Generation) utilisant les modèles Qwen3 de de
 git clone [repo-url]
 cd LocalRagModel
 
-# Installer les dépendances (inclut PyMuPDF pour PDF)
+# Installer les dépendances (inclut Selenium pour téléchargement web)
 pip install -r requirements.txt
 
-# Indexer vos documents (HTML/Markdown/PDF)
-python step01_indexer.py docs/ --no-flash-attention
+# Option 1: Télécharger documentation web (optionnel)
+# Les données sont automatiquement stockées dans ./data/[nom_dossier]
+python step01_downloader.py --start-url https://pytorch.org/docs/stable/ --output pytorch_docs
+# Ou plusieurs URLs de départ
+python step01_downloader.py --start-url https://site1.com/docs --start-url https://site2.com/api --output docs_mixtes
+
+# Option 2: Indexer vos documents locaux (HTML/Markdown/PDF)
+python step02_indexer.py docs/ --no-flash-attention
 
 # Lancer en mode local rapide (recommandé)
-python step03_chatbot.py --local-faiss
+python step04_chatbot.py --local-faiss
 
 # Ou lancer en mode public sécurisé
-python step03_chatbot.py --local-faiss --share
+python step04_chatbot.py --local-faiss --share
 ```
 
 ### Modes de Lancement
 
 #### Mode Local (Défaut HuggingFace)
 ```bash
-python step03_chatbot.py
+python step04_chatbot.py
 ```
 
 #### Mode Local FAISS ⭐ **Recommandé**
 ```bash
-python step03_chatbot.py --local-faiss
+python step04_chatbot.py --local-faiss
 ```
 - 🚀 **5x plus rapide** au démarrage
 - 🔌 **Fonctionne offline**
@@ -129,7 +169,7 @@ python step03_chatbot.py --local-faiss
 
 #### Mode Public Sécurisé
 ```bash
-python step03_chatbot.py --local-faiss --share
+python step04_chatbot.py --local-faiss --share
 ```
 - 🌐 **Interface publique** accessible via URL Gradio
 - 🔐 **Authentification automatique** (admin / mot_de_passe_16_chars)
@@ -138,10 +178,10 @@ python step03_chatbot.py --local-faiss --share
 #### Options Avancées
 ```bash
 # Chemin FAISS personnalisé
-python step03_chatbot.py --local-faiss --faiss-path ./mon_index
+python step04_chatbot.py --local-faiss --faiss-path ./mon_index
 
 # Utilisateur admin personnalisé
-python step03_chatbot.py --share --admin-user myuser
+python step04_chatbot.py --share --admin-user myuser
 ```
 
 ### Interface Web
@@ -212,7 +252,7 @@ Ce Space utilise des embeddings pré-calculés depuis le dataset :
 - [ ] **Extraction d'images PDF** : Analyse des diagrammes et schémas
 - [ ] **OCR pour PDFs scannés** : Support des documents numérisés
 - [ ] **Upload documents sources** vers HuggingFace Hub
-- [ ] **Step00** : Téléchargement automatique de documentation technique depuis internet
+- [x] **Step01** : Téléchargement automatique de documentation technique depuis internet
 - [ ] Support formats additionnels (DOCX, PowerPoint)
 - [ ] Interface d'administration pour gestion des documents
 
